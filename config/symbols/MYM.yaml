@@ -29,9 +29,14 @@ session:
   globex_open: "17:00"          # prior calendar day
   globex_close: "16:00"
   maintenance_halt: ["16:00", "17:00"]
-  rth_open: "08:30"
-  rth_close: "15:15"
-  rth_source: standardized      # equity-index RTH is well-established
+  # RTH determined EMPIRICALLY (highest-volume window), not from IB liquidHours
+  # and not from assumed pit hours. IB returns the same generic 08:30-16:00 CT
+  # window for every instrument -- including MET, which has no session concept
+  # at all -- which shows it is a platform default, not instrument-specific
+  # truth. scripts/empirical_rth.py fills these in from cached bars.
+  rth_open: null
+  rth_close: null
+  rth_source: empirical_pending
   use_eth_range: false          # spec S2: prior day H/L from RTH only
 
 day_boundary: "17:00"           # Globex open = start of trade date

@@ -1,22 +1,36 @@
-symbol: MGC
-ib_symbol: MGC
+# Full-size COMEX Silver -- 5,000 troy oz. NOT in the current trading scope
+# (the seven micros are). Kept as a DISTINCT entry rather than merged with
+# SIL, because IB exposes both under the same ib_symbol "SI" and they differ
+# only by multiplier. Merging them under one config is precisely how you end
+# up sizing a 5,000oz position while believing you hold a 1,000oz one.
+#
+#   SIL (micro)     multiplier 1000   $5.00/tick
+#   SI  (full)      multiplier 5000   $25.00/tick   <- this file
+#
+# data/sources/ibkr_contracts.py refuses to resolve either without an
+# ib_multiplier disambiguator.
+symbol: SI
+in_scope: false                 # not traded; present for spec completeness
+ib_symbol: SI
+ib_multiplier: 5000             # REQUIRED disambiguator vs SIL
+ib_local_symbol_root: SI
 exchange: COMEX
 asset_class: metals
-full_size_equivalent: GC        # 1/10 of GC (10 oz vs 100 oz)
+micro_equivalent: SIL
 
 databento:
   dataset: GLBX.MDP3
-  parent_symbol: MGC.FUT
+  parent_symbol: SI.FUT
   schema: ohlcv-1m
 
 contract_spec:
-  tick_size: 0.10               # USD per troy oz
-  tick_value: 1.00
-  point_value: 10.00
+  tick_size: 0.005              # USD per troy oz
+  tick_value: 25.00             # 5x the micro
+  point_value: 5000.00
   currency: USD
   verified: true                # IB reqContractDetails, paper 4002
 
-contract_months: [G, J, M, Q, V, Z]   # Feb Apr Jun Aug Oct Dec
+contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]   # IB lists all twelve
 rollover:
   rule: volume_crossover
   confirm_days: 2

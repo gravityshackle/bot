@@ -33,12 +33,14 @@ session:
   globex_open: "17:00"
   globex_close: "16:00"
   maintenance_halt: ["16:00", "17:00"]
-  # Spec: "RTH convention weakest of this group post-floor-closure -- treat as
-  # needing empirical confirmation (highest-volume window)". Left null on
-  # purpose so nothing downstream silently assumes a pit window.
+  # RTH determined EMPIRICALLY (highest-volume window), not from IB liquidHours
+  # and not from assumed pit hours. IB returns the same generic 08:30-16:00 CT
+  # window for every instrument -- including MET, which has no session concept
+  # at all -- which shows it is a platform default, not instrument-specific
+  # truth. scripts/empirical_rth.py fills these in from cached bars.
   rth_open: null
   rth_close: null
-  rth_source: empirical_pending   # scripts/empirical_rth.py fills this
+  rth_source: empirical_pending
   use_eth_range: false
 
 day_boundary: "17:00"           # Globex open = start of trade date
