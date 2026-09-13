@@ -19,9 +19,9 @@ contract_spec:
 contract_months: [H, M, U, Z]   # Mar Jun Sep Dec
 rollover:
   rule: volume_crossover
-  confirm_days: 2               # next must out-volume front N consecutive sessions
-  calendar_backstop_days: 8     # force roll N days pre-expiry if crossover never fires
-  candidate: next_chronological
+  confirm_days: 1              # tuned on 3mo real data (Phase 1 sweep)
+  calendar_backstop_days: 3    # last resort only -- must not preempt the crossover
+  candidate: highest_volume
 
 session:
   timezone: America/Chicago

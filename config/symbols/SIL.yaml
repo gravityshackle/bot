@@ -23,9 +23,9 @@ contract_months: [F, H, K, N, U, V, X, Z]   # observed listed at IB
                                             # (Jan Mar May Jul Sep Oct Nov Dec)
 rollover:
   rule: volume_crossover
-  confirm_days: 2
-  calendar_backstop_days: 5
-  candidate: next_chronological
+  confirm_days: 1              # tuned on 3mo real data (Phase 1 sweep)
+  calendar_backstop_days: 2    # last resort only -- must not preempt the crossover
+  candidate: highest_volume
 
 session:
   timezone: America/Chicago

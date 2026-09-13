@@ -1,0 +1,55 @@
+# Historical data acquisition + derived timeframes.
+# No thresholds live in code -- everything tunable is here.
+
+source:
+  provider: databento
+  dataset: GLBX.MDP3          # all seven roots are CME Globex
+  schema: ohlcv-1m            # base granularity; every timeframe is resampled
+                              # from this so backtest and live share one path
+  stype_in: parent            # "MES.FUT" -> every listed MES future
+  api_key_env: DATABENTO_API_KEY   # .env only, never committed
+
+window:
+  # Phase 1 validation pass. Deliberately short: the roll-logic edge cases are
+  # covered by offline unit tests, so this only needs enough span to eyeball
+  # real seams. Widen for the Phase 4 backtest pull.
+  months: 3
+  end: last_complete_session   # or an explicit YYYY-MM-DD
+
+cost_control:
+  # Databento bills by volume. Always price a request before sending it.
+  estimate_before_fetch: true
+  abort_above_usd: 25.00       # hard stop; raises rather than silently spending
+
+cache:
+  dir: cache/databento
+  format: parquet
+  # Cache key includes the window, so widening it later fetches only the
+  # delta rather than re-billing for bars already on disk.
+  reuse_existing: true
+
+timeframes:
+  base: 1min
+  # Derived timeframes. The specs reference 5m/15m entry, 1h/4h/Daily HTF, and
+  # a 10m three-tail window; entry/HTF pairing is grid-searched in Phase 4
+  # rather than fixed now.
+  derived: [5min, 10min, 15min, 30min, 1h, 4h, 1D]
+  label: left                  # bar timestamp = bar OPEN time
+  closed: left
+
+empirical_rth:
+  # Replaces IB liquidHours, which returns the same generic window for every
+  # instrument (including MET, which has no session at all) and is therefore a
+  # platform default rather than instrument-specific truth.
+  method: highest_volume_window
+  target_volume_share: 0.70    # smallest contiguous window holding this share
+                               # of an average session's volume
+  granularity_minutes: 5
+  min_sessions_required: 20    # refuse to publish a window from a thin sample
+  applies_to: [MES, MNQ, MYM, MCL, MGC, SIL]   # MET excluded by construction
+
+validation:
+  # Phase 1 acceptance checks, run over every fetched series.
+  max_gap_minutes_within_session: 15
+  flag_price_jump_atr_multiple: 4.0   # seams away from a roll date are a bug
+  require_tick_grid_alignment: true

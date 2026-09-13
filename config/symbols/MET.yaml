@@ -27,14 +27,14 @@ contract_spec:
 contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]
 rollover:
   rule: volume_crossover
-  confirm_days: 1
-  calendar_backstop_days: 4
-  # AMBIGUOUS -- flagged for review. Because MET lists 6 near monthlies AND
+  confirm_days: 2              # tuned on 3mo real data (Phase 1 sweep)
+  calendar_backstop_days: 2    # last resort only -- must not preempt the crossover
+  # RESOLVED by the Phase 1 sweep. Because MET lists 6 near monthlies AND
   # quarterlies further out simultaneously, a quarterly can out-volume a nearby
   # monthly. next_chronological only ever rolls to the next listed contract in
   # time; highest_volume would allow skipping over a low-volume monthly. These
   # produce materially different continuous series.
-  candidate: next_chronological
+  candidate: highest_volume
 
 session:
   timezone: America/Chicago
