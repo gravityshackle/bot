@@ -1,0 +1,44 @@
+symbol: MES
+ib_symbol: MES
+exchange: CME
+asset_class: equity_index
+full_size_equivalent: ES        # 1/10 of ES
+
+databento:
+  dataset: GLBX.MDP3
+  parent_symbol: MES.FUT        # stype_in=parent -> all listed MES futures
+  schema: ohlcv-1m
+
+contract_spec:
+  tick_size: 0.25               # index points
+  tick_value: 1.25              # USD per tick
+  point_value: 5.00             # tick_value / tick_size
+  currency: USD
+  verified: true                # IB reqContractDetails, paper 4002               # -> scripts/verify_contract_specs.py
+
+contract_months: [H, M, U, Z]   # Mar Jun Sep Dec
+rollover:
+  rule: volume_crossover
+  confirm_days: 2               # next must out-volume front N consecutive sessions
+  calendar_backstop_days: 8     # force roll N days pre-expiry if crossover never fires
+  candidate: next_chronological
+
+session:
+  timezone: America/Chicago
+  mode: rth_and_eth
+  globex_open: "17:00"          # prior calendar day
+  globex_close: "16:00"
+  maintenance_halt: ["16:00", "17:00"]
+  rth_open: "08:30"
+  rth_close: "15:15"
+  rth_source: standardized      # equity-index RTH is well-established
+  use_eth_range: false          # spec S2: prior day H/L from RTH only
+
+day_boundary: "17:00"           # Globex open = start of trade date
+
+volume_baseline: session_matched   # spec S12: RTH-avg vs RTH-bar, never blended
+
+liquidity_filter:
+  min_avg_volume: null          # spec: set from backtest, do not guess
+
+margin_source: ibkr_api         # never hardcode; fetch live

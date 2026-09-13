@@ -1,0 +1,46 @@
+symbol: MCL
+ib_symbol: MCL
+exchange: NYMEX
+asset_class: energy
+full_size_equivalent: CL        # 1/10 of CL (100 bbl vs 1,000 bbl)
+
+databento:
+  dataset: GLBX.MDP3
+  parent_symbol: MCL.FUT
+  schema: ohlcv-1m
+
+contract_spec:
+  tick_size: 0.01               # USD per barrel
+  tick_value: 1.00
+  point_value: 100.00
+  currency: USD
+  verified: true                # IB reqContractDetails, paper 4002
+
+# Monthly listing -- 12 rolls/year, not 4. Spec flags this as needing more
+# frequent rollover handling than the quarterly index contracts.
+contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]
+rollover:
+  rule: volume_crossover
+  confirm_days: 1               # monthly cycle leaves less room to wait for confirm
+  calendar_backstop_days: 4     # spec: "3-4 days before expiry"; backstop at 4
+  candidate: next_chronological
+
+session:
+  timezone: America/Chicago
+  mode: rth_and_eth
+  globex_open: "17:00"
+  globex_close: "16:00"
+  maintenance_halt: ["16:00", "17:00"]
+  rth_open: "08:00"             # legacy pit window -- spec says CONFIRM, not settled
+  rth_close: "13:30"
+  rth_source: legacy_pit_unconfirmed
+  use_eth_range: false
+
+day_boundary: "17:00"           # Globex open = start of trade date
+
+volume_baseline: session_matched   # spec S12: RTH-avg vs RTH-bar, never blended
+
+liquidity_filter:
+  min_avg_volume: null
+
+margin_source: ibkr_api

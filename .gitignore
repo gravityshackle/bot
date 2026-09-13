@@ -1,0 +1,36 @@
+# --- secrets: never commit ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+ib_*.json
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- virtualenvs (venv lives at ../venv, but cover in-repo cases too) ---
+venv/
+.venv/
+env/
+
+# --- market data cache & generated artifacts (large, reproducible) ---
+cache/
+plots/
+logs/
+*.dbn
+*.dbn.zst
+*.parquet
+*.csv
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

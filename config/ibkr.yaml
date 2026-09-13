@@ -1,0 +1,24 @@
+# Interactive Brokers connection. Host/port/clientId only -- no credentials,
+# no account numbers. Account identity comes from whichever session is logged
+# into the Gateway; the bot never stores it.
+#
+# Port verified empirically on 2026-09-12 via scripts/probe_ib_account.py:
+# 4002 is reachable and managedAccounts() returns a DU* (paper) account.
+# 4001 was also listening at one point during setup -- that is the LIVE socket.
+# The guard below refuses to run against a non-paper account.
+connection:
+  host: 127.0.0.1
+  port: 4002                 # paper. 4001 = live -- do not point here.
+  client_id: 17
+  timeout_seconds: 15
+  readonly: true             # Phase 1-4 are backtest/paper only; no order path
+
+safety:
+  require_paper_account: true   # abort unless managedAccounts() is DU*/DF*
+  # run_live.py is deliberately not built. Do not add a live code path without
+  # an explicit decision outside the bot.
+  allow_live_trading: false
+
+market_data:
+  # IB is the Phase 5 live/paper source; Databento covers historical.
+  use_delayed_if_no_subscription: false

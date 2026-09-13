@@ -1,0 +1,51 @@
+symbol: SIL
+ib_symbol: SI                   # IB lists micro silver under SI, NOT SIL
+ib_multiplier: 1000             # REQUIRED disambiguator: SI/COMEX returns
+                                # full-size (mult 5000) and micro mixed
+ib_local_symbol_root: SIL       # Globex code, appears in localSymbol only
+exchange: COMEX
+asset_class: metals
+full_size_equivalent: SI        # 1/5 of SI (1,000 oz vs 5,000 oz)
+
+databento:
+  dataset: GLBX.MDP3
+  parent_symbol: SIL.FUT
+  schema: ohlcv-1m
+
+contract_spec:
+  tick_size: 0.005              # USD per troy oz
+  tick_value: 5.00
+  point_value: 1000.00
+  currency: USD
+  verified: true                # IB reqContractDetails, paper 4002
+
+contract_months: [F, H, K, N, U, V, X, Z]   # observed listed at IB
+                                            # (Jan Mar May Jul Sep Oct Nov Dec)
+rollover:
+  rule: volume_crossover
+  confirm_days: 2
+  calendar_backstop_days: 5
+  candidate: next_chronological
+
+session:
+  timezone: America/Chicago
+  mode: rth_and_eth
+  globex_open: "17:00"
+  globex_close: "16:00"
+  maintenance_halt: ["16:00", "17:00"]
+  # Spec: "RTH convention weakest of this group post-floor-closure -- treat as
+  # needing empirical confirmation (highest-volume window)". Left null on
+  # purpose so nothing downstream silently assumes a pit window.
+  rth_open: null
+  rth_close: null
+  rth_source: empirical_pending   # scripts/empirical_rth.py fills this
+  use_eth_range: false
+
+day_boundary: "17:00"           # Globex open = start of trade date
+
+volume_baseline: session_matched   # spec S12: RTH-avg vs RTH-bar, never blended
+
+liquidity_filter:
+  min_avg_volume: null
+
+margin_source: ibkr_api

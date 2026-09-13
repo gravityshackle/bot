@@ -1,0 +1,69 @@
+# MET -- Micro Ether. Structurally different from the other six; see the
+# MET-specific notes in symbol_spec_and_repo_structure.md. The differences are
+# expressed as distinct field VALUES here (mode: continuous, rth: null,
+# volume_baseline: hour_of_day) rather than as a single boolean override, so
+# downstream code cannot silently assume an RTH window exists for this symbol.
+symbol: MET
+ib_symbol: MET
+exchange: CME
+asset_class: crypto
+full_size_equivalent: null      # no full-size retail ETH future in this bot's scope
+
+databento:
+  dataset: GLBX.MDP3
+  parent_symbol: MET.FUT
+  schema: ohlcv-1m
+
+contract_spec:
+  tick_size: 0.50               # index points
+  tick_value: 0.05              # USD per tick -- smallest of the seven by far
+  point_value: 0.10
+  currency: USD
+  contract_unit: 0.10           # ETH per contract
+  verified: true                # IB reqContractDetails, paper 4002
+
+# Monthly (6 near months) + quarterlies further out -- NOT the quarterly index
+# pattern. Needs the same "monthly, more frequent" treatment as MCL.
+contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]
+rollover:
+  rule: volume_crossover
+  confirm_days: 1
+  calendar_backstop_days: 4
+  # AMBIGUOUS -- flagged for review. Because MET lists 6 near monthlies AND
+  # quarterlies further out simultaneously, a quarterly can out-volume a nearby
+  # monthly. next_chronological only ever rolls to the next listed contract in
+  # time; highest_volume would allow skipping over a low-volume monthly. These
+  # produce materially different continuous series.
+  candidate: next_chronological
+
+session:
+  timezone: America/Chicago
+  mode: continuous              # no cash-market session to anchor an RTH to
+  globex_open: "17:00"          # Sun
+  globex_close: "16:00"         # Fri
+  maintenance_halt: ["16:00", "17:00"]
+  rth_open: null
+  rth_close: null
+  rth_source: not_applicable    # spec: "No RTH concept at all"
+  use_eth_range: true           # the default for MET, not an override
+
+# Spec S2 requires a redefined day boundary since there is no natural close.
+# Set to the daily maintenance halt (16:00 CT), which keeps MET's trade-date
+# cutoff aligned with the other six rather than introducing a second calendar.
+day_boundary: "16:00"
+
+# Spec S12's session-matched volume baseline (RTH-avg vs RTH-bar) is undefined
+# for a symbol with no session split. Hour-of-day matching is the substitute --
+# crypto has strong intraday volume seasonality that a flat 20-bar average
+# would smear.
+volume_baseline: hour_of_day
+
+risk_notes:
+  dynamic_price_limit_pct: 10   # CME dynamic variant on crypto futures
+  requires_liquidity_sanity_check: true   # per spec, before the standard
+                                          # no-trade-on-illiquid-symbols rule
+
+liquidity_filter:
+  min_avg_volume: null
+
+margin_source: ibkr_api

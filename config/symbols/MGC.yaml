@@ -1,0 +1,47 @@
+symbol: MGC
+ib_symbol: MGC
+exchange: COMEX
+asset_class: metals
+full_size_equivalent: GC        # 1/10 of GC (10 oz vs 100 oz)
+
+databento:
+  dataset: GLBX.MDP3
+  parent_symbol: MGC.FUT
+  schema: ohlcv-1m
+
+contract_spec:
+  tick_size: 0.10               # USD per troy oz
+  tick_value: 1.00
+  point_value: 10.00
+  currency: USD
+  verified: true                # IB reqContractDetails, paper 4002
+
+contract_months: [G, J, M, Q, V, Z]   # Feb Apr Jun Aug Oct Dec
+rollover:
+  rule: volume_crossover
+  confirm_days: 2
+  calendar_backstop_days: 5
+  candidate: next_chronological
+
+session:
+  timezone: America/Chicago
+  mode: rth_and_eth
+  globex_open: "17:00"
+  globex_close: "16:00"
+  maintenance_halt: ["16:00", "17:00"]
+  # Spec: "RTH convention weakest of this group post-floor-closure -- treat as
+  # needing empirical confirmation (highest-volume window)". Left null on
+  # purpose so nothing downstream silently assumes a pit window.
+  rth_open: null
+  rth_close: null
+  rth_source: empirical_pending   # scripts/empirical_rth.py fills this
+  use_eth_range: false
+
+day_boundary: "17:00"           # Globex open = start of trade date
+
+volume_baseline: session_matched   # spec S12: RTH-avg vs RTH-bar, never blended
+
+liquidity_filter:
+  min_avg_volume: null
+
+margin_source: ibkr_api
