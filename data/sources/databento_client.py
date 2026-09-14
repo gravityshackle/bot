@@ -33,6 +33,16 @@ class CostLimitExceeded(RuntimeError):
     """Estimated spend exceeded the configured ceiling; nothing was fetched."""
 
 
+class ConfirmationRequired(RuntimeError):
+    """A billable fetch was attempted without explicit approval.
+
+    A cost estimate is not consent. Any request that would actually bill has to
+    be approved by the operator first -- this exists because a moving cache key
+    once caused a full re-pull to run silently just because the date changed.
+    Callers pass confirm=True only after a human has seen the price.
+    """
+
+
 @dataclass
 class FetchResult:
     bars: pd.DataFrame
@@ -129,8 +139,13 @@ def _cache_path(cfg: dict, symbol: str, start, end, kind: str) -> Path:
 
 
 def fetch_ohlcv(cfg: dict, symbol_cfg: dict, *, end=None,
-                dry_run: bool = False) -> FetchResult:
-    """Fetch (or load cached) 1m bars for every listed contract of one root."""
+                dry_run: bool = False, confirm: bool = False) -> FetchResult:
+    """Fetch (or load cached) 1m bars for every listed contract of one root.
+
+    Reading from cache is always free and never needs confirmation. A fetch
+    that would bill requires confirm=True when cost_control
+    .require_explicit_confirmation is set.
+    """
     symbol = symbol_cfg["symbol"]
     src = cfg["source"]
     start, end_ts = resolve_window(cfg, end)
@@ -156,6 +171,14 @@ def fetch_ohlcv(cfg: dict, symbol_cfg: dict, *, end=None,
             )
     if dry_run:
         return FetchResult(pd.DataFrame(), {}, cost, False, [])
+
+    if cfg["cost_control"].get("require_explicit_confirmation", True) and not confirm:
+        raise ConfirmationRequired(
+            f"{symbol}: this would BILL about ${cost:.2f} for "
+            f"{start:%Y-%m-%d}..{end_ts:%Y-%m-%d} (no cache entry for that "
+            "window). Re-run with confirm=True only after the operator has "
+            "approved the spend."
+        )
 
     metas = fetch_definitions(cfg, symbol_cfg, start, end_ts)
 

@@ -24,6 +24,12 @@ cost_control:
   # Databento bills by volume. Always price a request before sending it.
   estimate_before_fetch: true
   abort_above_usd: 25.00       # hard stop; raises rather than silently spending
+  # A cost estimate is NOT consent. Any fetch that would actually bill
+  # requires confirm=True from a caller acting on explicit operator
+  # approval. Cache reads are free and unaffected. This exists because a
+  # moving cache key once re-billed a full pull just because the date
+  # changed -- the estimate ran, stayed under the ceiling, and proceeded.
+  require_explicit_confirmation: true
 
 cache:
   dir: cache/databento
@@ -50,7 +56,10 @@ empirical_rth:
                                # of an average session's volume
   granularity_minutes: 5
   min_sessions_required: 20    # refuse to publish a window from a thin sample
-  applies_to: [MES, MNQ, MYM, MCL, MGC, SIL]   # MET excluded by construction
+  # Only the index micros have an isolable day session. MCL/MGC/SIL were
+  # measured and found to have none (see their configs), so like MET they
+  # are excluded -- there is nothing for this script to determine.
+  applies_to: [MES, MNQ, MYM]
 
 validation:
   # Phase 1 acceptance checks, run over every fetched series.

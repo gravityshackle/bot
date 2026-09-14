@@ -25,23 +25,26 @@ rollover:
 
 session:
   timezone: America/Chicago
-  mode: rth_and_eth
+  mode: continuous
   globex_open: "17:00"
   globex_close: "16:00"
   maintenance_halt: ["16:00", "17:00"]
-  # RTH determined EMPIRICALLY (highest-volume window), not from IB liquidHours
-  # and not from assumed pit hours. IB returns the same generic 08:30-16:00 CT
-  # window for every instrument -- including MET, which has no session concept
-  # at all -- which shows it is a platform default, not instrument-specific
-  # truth. scripts/empirical_rth.py fills these in from cached bars.
+  # NO RTH SPLIT. The volume profile shows real overnight and overseas trade
+  # with no isolable day session: even at a 50% target the shortest window
+  # holding that share spans 7.3-8.4h and starts pre-dawn CT (MGC 06:35-15:00,
+  # SIL 06:00-13:25, MCL 06:15-13:35). Forcing an RTH window here would invent
+  # a boundary the market does not have, so these three are treated like MET --
+  # full Globex session as the day scope -- while keeping the 17:00 CT day
+  # boundary they share with the index micros.
   rth_open: null
   rth_close: null
-  rth_source: empirical_pending
-  use_eth_range: false
+  rth_source: not_applicable_empirical
+  use_eth_range: true
 
 day_boundary: "17:00"           # Globex open = start of trade date
 
-volume_baseline: session_matched   # spec S12: RTH-avg vs RTH-bar, never blended
+volume_baseline: hour_of_day       # no RTH/ETH split to match against;
+                                   # same substitute MET uses (spec S12)
 
 liquidity_filter:
   min_avg_volume: null
