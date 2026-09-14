@@ -13,6 +13,7 @@ import yaml
 
 from data.continuous_contract import (
     ContinuousSeries,
+    daily_volume_by_contract,
     RolloverConfig,
     build_roll_map,
     stitch,
@@ -57,7 +58,52 @@ def build_continuous(symbol: str, data_cfg: dict | None = None
     roll_map, warnings = build_roll_map(bars, result.metas, roll_cfg)
     series = stitch(bars, roll_map, symbol=symbol, warnings=warnings)
     series.warnings.extend(result.problems)
+    series.warnings.extend(coverage_warnings(series, bars, data_cfg))
     return series, scfg, bars
+
+
+def coverage_warnings(series: ContinuousSeries, all_bars: pd.DataFrame,
+                      data_cfg: dict) -> list[str]:
+    """Assert the stitched series actually tracks the liquid contract.
+
+    A continuous series built from the wrong contract is still a well-formed
+    frame -- monotonic timestamps, valid OHLC, tick-aligned prices -- so every
+    structural check passes while the prices belong to something nobody trades.
+    Volume share is what catches it, so it is checked on every build rather
+    than left to the validation script.
+    """
+    out: list[str] = []
+    thresh = float(data_cfg.get("validation", {})
+                   .get("min_active_volume_share_warn", 0.50))
+
+    total_root = int(all_bars["volume"].sum())
+    if total_root <= 0:
+        return out
+    captured = int(series.bars["volume"].sum()) / total_root
+    if captured < thresh:
+        out.append(
+            f"{series.symbol}: stitched series holds only {captured:.1%} of this "
+            f"root's total volume -- the roll map is almost certainly tracking "
+            f"the wrong contract(s)")
+
+    vol = daily_volume_by_contract(all_bars)
+    day_total = vol.sum(axis=1)
+    active = series.bars.groupby("trade_date", observed=True)["raw_symbol"].first()
+    shares = {d: vol.at[d, a] / day_total.loc[d]
+              for d, a in active.items()
+              if d in vol.index and day_total.loc[d] > 0}
+    if shares:
+        s = pd.Series(shares)
+        bad = s[s < thresh]
+        # One low-share session per roll is expected: the crossover is detected
+        # on that session and the roll takes effect on the next one.
+        if len(bad) > max(len(series.roll_map), 0) + 1:
+            out.append(
+                f"{series.symbol}: {len(bad)} session(s) below {thresh:.0%} "
+                f"volume share (worst {s.min():.1%} on {s.idxmin()}) against "
+                f"{len(series.roll_map)} roll(s) -- more than roll transitions "
+                "alone explain")
+    return out
 
 
 def seam_report(series: ContinuousSeries, scfg: dict,

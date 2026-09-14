@@ -234,7 +234,13 @@ def stitch(bars, roll_map, symbol: str = "", warnings=None) -> ContinuousSeries:
                                 warnings=list(warnings or []))
 
     if roll_map.empty:
-        active = bars["raw_symbol"].iloc[0]
+        # No roll in the window -- one contract is front throughout. It must be
+        # chosen by VOLUME. Taking bars.iloc[0] picks whatever sorts first, and
+        # since normalize() sorts by raw_symbol, that is the alphabetically
+        # first contract: for MES that selected MESH7 (4,753 lots over the
+        # window) instead of MESU6 (67 million). The series still looked
+        # well-formed, just built from a nearly untraded contract.
+        active = bars.groupby("raw_symbol", observed=True)["volume"].sum().idxmax()
         sel = bars[bars["raw_symbol"] == active].copy()
     else:
         rm = roll_map.sort_values("effective_date")

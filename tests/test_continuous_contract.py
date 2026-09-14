@@ -377,3 +377,55 @@ def test_daily_volume_matrix_shape():
     assert set(vol.columns) == {"MESH6", "MESM6"}
     assert len(vol) == len(bars["trade_date"].unique())
     assert (vol >= 0).all().all()
+
+
+# --------------------------------------------------------------------------
+# regression: no-roll window must still select the LIQUID contract
+# --------------------------------------------------------------------------
+
+def test_no_roll_window_selects_highest_volume_not_alphabetical():
+    """Regression for a silent wrong-contract bug found on real MES data.
+
+    When no roll occurs in the window, stitch used bars.iloc[0] to pick the
+    active contract. normalize() sorts by raw_symbol, so that returned the
+    ALPHABETICALLY first contract: MESH7 (4,753 lots over the window) was
+    selected instead of MESU6 (67 million). The resulting frame passed every
+    structural check -- monotonic, valid OHLC, tick-aligned -- while holding
+    prices from a contract nobody trades.
+    """
+    bars = make_bars({
+        # sorts first alphabetically, essentially untraded
+        "MESH7": {"price": 5200.0, "volume": lambda i: 4},
+        # the real front month
+        "MESU6": {"price": 5000.0, "volume": lambda i: 800_000},
+    })
+    bars = bars.sort_values(["raw_symbol", "ts"]).reset_index(drop=True)
+    assert bars["raw_symbol"].iloc[0] == "MESH7", "fixture must reproduce the sort order"
+
+    metas = {"MESU6": _meta("MESU6", "MES", "U", 2026, "2026-09-18"),
+             "MESH7": _meta("MESH7", "MES", "H", 2027, "2027-03-19")}
+    roll_map, _ = build_roll_map(bars, metas,
+                                 RolloverConfig(confirm_days=1, calendar_backstop_days=3,
+                                                candidate="highest_volume"))
+    assert roll_map.empty, "no roll should occur in this window"
+
+    series = stitch(bars, roll_map, symbol="MES")
+    assert list(series.bars["raw_symbol"].unique()) == ["MESU6"]
+    captured = series.bars["volume"].sum() / bars["volume"].sum()
+    assert captured > 0.99, f"stitched series captured only {captured:.1%} of volume"
+
+
+def test_no_roll_window_coverage_is_near_total():
+    """The volume-share guard should see essentially all volume when one
+    contract is front for the entire window."""
+    bars = make_bars({
+        "MCLZ6": {"price": 70.0, "volume": lambda i: 500_000},
+        "MCLF7": {"price": 70.5, "volume": lambda i: 100},
+    })
+    metas = {"MCLZ6": _meta("MCLZ6", "MCL", "Z", 2026, "2026-11-20"),
+             "MCLF7": _meta("MCLF7", "MCL", "F", 2027, "2026-12-21")}
+    roll_map, _ = build_roll_map(bars, metas,
+                                 RolloverConfig(confirm_days=1, calendar_backstop_days=2,
+                                                candidate="highest_volume"))
+    series = stitch(bars, roll_map, symbol="MCL")
+    assert series.bars["volume"].sum() / bars["volume"].sum() > 0.99

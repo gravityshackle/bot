@@ -14,7 +14,11 @@ window:
   # covered by offline unit tests, so this only needs enough span to eyeball
   # real seams. Widen for the Phase 4 backtest pull.
   months: 3
-  end: last_complete_session   # or an explicit YYYY-MM-DD
+  # PINNED, deliberately. "last_complete_session" makes the cache key move
+  # every calendar day, so the cache never hits and each run silently
+  # re-bills the full pull. A fixed end also makes Phase 1 reproducible.
+  # Widen this explicitly for the Phase 4 backtest pull.
+  end: "2026-09-12"            # or last_complete_session (re-bills daily)
 
 cost_control:
   # Databento bills by volume. Always price a request before sending it.
@@ -53,3 +57,5 @@ validation:
   max_gap_minutes_within_session: 15
   flag_price_jump_atr_multiple: 4.0   # seams away from a roll date are a bug
   require_tick_grid_alignment: true
+  min_active_volume_share_warn: 0.50   # warn if the stitched series is not
+                                       # tracking the liquid contract
