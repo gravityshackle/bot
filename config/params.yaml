@@ -1,0 +1,165 @@
+# Feature-layer tunables. Every threshold in the level-detection spec lives
+# here; none are hardcoded in features/*.py.
+#
+# All values are the spec's STARTING DEFAULTS, not settled truth. The spec's
+# own tuning table marks each one's sensitivity, reproduced as `sensitivity:`
+# so the Phase 4 grid search knows where to spend its budget.
+#
+# Per-symbol overrides go in config/symbols/<SYM>.yaml under a `params:` key
+# and are merged over these at load time.
+
+# --- timeframes -----------------------------------------------------------
+# The specs reference 5m/15m entry, 1h/4h/Daily HTF, and a 10m three-tail
+# window without ever fixing them. Left explicit and grid-searchable rather
+# than assumed; Phase 4 decides.
+timeframes:
+  entry: 5min
+  htf: 1h                  # trend filter (S14) and HTF ATR for swing sizing
+  daily: 1D                # gap threshold (S3) and daily time count (S18)
+  three_tail: 10min        # S19 -- Soloway's own usage is a 10-minute chart
+
+# --- S1 swing highs / lows -------------------------------------------------
+swings:
+  pivot_n_ltf: 2           # sensitivity: HIGH -- changes structure entirely
+  pivot_n_htf: 4           # spec says 3-5 on HTF; midpoint as the default
+  # A pivot is only confirmed once N bars have CLOSED after it. Never relax
+  # this: an unconfirmed pivot repaints, and a repainting swing silently
+  # invalidates every level, target and trailing stop derived from it.
+  require_confirmation: true
+  # "Major" vs "minor" classification. The spec says a swing is major if its
+  # retracement depth >= 1.0 x ATR(14, HTF) but does not define what the depth
+  # is measured against -- FLAGGED, see docs/open_questions.md. Implementation
+  # is deferred until that is settled.
+  major_atr_multiple: 1.0
+  major_depth_reference: UNRESOLVED   # blocks structure.classify_swings()
+
+# --- S2 prior day / week high-low -----------------------------------------
+prior_levels:
+  # Session scope comes from each symbol's own config (session.mode and
+  # use_eth_range), not from here: MES/MNQ/MYM use their RTH window, while
+  # MCL/MGC/SIL/MET use the full session.
+  weekly_reset_weekday: 0  # Monday
+
+# --- S3 gap zones ----------------------------------------------------------
+gaps:
+  threshold_atr_multiple: 0.15    # x ATR(14, Daily); sensitivity: MEDIUM
+  fill_requires_full_zone: true   # tagged filled only after traversing it all
+
+# --- S4 breakout / breakdown ----------------------------------------------
+breakout:
+  mode: buffer             # "buffer" (S4) or "confirmation_signal" (S17).
+                           # The spec is explicit: never run both on one setup.
+  buffer_min_ticks: 2
+  buffer_atr_multiple: 0.10       # buffer = max(2 ticks, 0.10 x ATR(entry))
+                                  # sensitivity: HIGH -- noise vs false breakout
+
+# --- S5 consolidation range ------------------------------------------------
+range_detection:
+  atr_compression_ratio: 0.70     # ATR(14) < 0.70 x ATR(14).rolling_mean(50)
+  atr_mean_window: 50
+  span_atr_multiple: 1.5          # (max-min over N bars) < 1.5 x ATR(14)
+  span_lookback_bars: 15          # spec says 10-20; midpoint
+
+# --- S6 test-zone tolerance ------------------------------------------------
+test_zone:
+  min_ticks: 2
+  atr_multiple: 0.15              # sensitivity: MEDIUM
+                                  # NOTE: this only starts the bot WATCHING a
+                                  # level. It never triggers an entry by itself.
+
+# --- S7 rejection candle ---------------------------------------------------
+rejection:
+  clv_threshold: 0.60             # >= +0.60 bullish, <= -0.60 bearish
+  wick_body_ratio: 2.0            # sensitivity: MEDIUM
+  min_body_atr_multiple: 0.25     # filters doji/noise bars
+
+# --- S8 failed breakout ----------------------------------------------------
+failed_breakout:
+  window_bars: 3                  # spec says K = 1-3; sensitivity: MEDIUM
+
+# --- S9 breakout / retest --------------------------------------------------
+breakout_retest:
+  max_bars_to_retest: 10          # K_max
+
+# --- S10 range reclaim -----------------------------------------------------
+range_reclaim:
+  window_bars: 3                  # same math as S8, applied to range edges
+
+# --- S11 momentum continuation ---------------------------------------------
+momentum:
+  min_body_ratio: 0.60            # body / (high - low)
+  requires_trend_alignment: true
+  requires_volume_expansion: true
+
+# --- S12 volume expansion --------------------------------------------------
+volume_expansion:
+  multiplier: 1.5                 # sensitivity: HIGH -- very instrument-dependent
+  lookback_bars: 20
+  # Baseline scope comes from each symbol's volume_baseline field:
+  # session_matched for the index micros, hour_of_day for the four continuous
+  # instruments (MCL/MGC/SIL/MET), which have no session split to match on.
+
+# --- S13 CLV ---------------------------------------------------------------
+clv:
+  zero_range_policy: treat_as_zero   # guard against divide-by-zero bars
+
+# --- S14 trend filter ------------------------------------------------------
+trend:
+  ema_period: 20                  # one EMA only; spec allows 20 or 50
+  slope_lookback_bars: 5          # sensitivity: LOW
+  # Spec S14 says a neutral/chop HTF is a deliberate no-trade filter, but the
+  # scoring spec assigns neutral-HTF reversals a 0.5 directional score, which
+  # presupposes they reach scoring. CONTRADICTION -- see
+  # docs/open_questions.md. Not needed until Phase 3.
+  neutral_policy: UNRESOLVED
+
+# --- S15 ATR & risk state --------------------------------------------------
+atr:
+  period: 14
+  regime_mean_window: 50
+  high_vol_ratio: 1.3             # ATR(14) > 1.3 x mean -> high vol
+  low_vol_ratio: 0.7              # ATR(14) < 0.7 x mean -> low vol
+stops:
+  buffer_atr_multiple: 0.20       # spec range 0.10-0.25
+targets:
+  min_reward_risk: 2.0            # sensitivity: HIGH -- frequency vs quality
+  rr_cap: 4.0                     # scoring S5 caps RR benefit here
+  # Spec S15: target = nearer of (next major level, 2R), and flag when the two
+  # disagree "by a lot" -- no threshold given. This is that threshold.
+  disagreement_flag_ratio: 1.5
+
+# --- S17 confirmation signal (Soloway two-stage) ---------------------------
+confirmation_signal:
+  k_confirm_bars: 4               # spec says 3-5; sensitivity: HIGH
+                                  # Soloway's framing is daily-chart; intraday
+                                  # wants a proportionally shorter window.
+
+# --- S18 time count (exhaustion) -------------------------------------------
+time_count:
+  exhaustion_threshold: 6         # sensitivity: MEDIUM
+  # Flat/unchanged bars neither reset nor extend the count -- hold it.
+  flat_bar_policy: hold
+  # Computed independently per timeframe; never blended into one number.
+  timeframes: [1D, 1h, 5min]
+
+# --- S19 three tail theory -------------------------------------------------
+three_tail:
+  lookback_bars: 6                # spec says 5-8; sensitivity: MEDIUM
+  wick_body_ratio: 2.0
+  max_body_atr_multiple: 0.5      # keeps it a rejection wick, not a trend bar
+  cluster_tolerance_min_ticks: 2
+  cluster_tolerance_atr_multiple: 0.10   # sensitivity: HIGH -- too loose
+                                         # merges unrelated wicks
+  min_tails_required: 3           # true to the name; 2 is the relaxed variant
+  requires_nearby_level: false    # a cluster in open space is weaker evidence
+                                  # and scores lower, but is not excluded
+
+# --- undefined in the specs, blocking implementation -----------------------
+# Both are referenced as if they exist -- engulfing carries a 0.80 base score
+# and is listed in Stage 1 gate 1; channel boundaries are a level_confluence
+# type -- but neither is defined anywhere in the four documents.
+# See docs/open_questions.md.
+engulfing:
+  status: UNDEFINED_IN_SPEC
+channels:
+  status: UNDEFINED_IN_SPEC
