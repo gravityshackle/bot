@@ -26,12 +26,14 @@ swings:
   # this: an unconfirmed pivot repaints, and a repainting swing silently
   # invalidates every level, target and trailing stop derived from it.
   require_confirmation: true
-  # "Major" vs "minor" classification. The spec says a swing is major if its
-  # retracement depth >= 1.0 x ATR(14, HTF) but does not define what the depth
-  # is measured against -- FLAGGED, see docs/open_questions.md. Implementation
-  # is deferred until that is settled.
+  # "Major" vs "minor": depth >= major_atr_multiple x ATR(14, HTF).
+  # RESOLVED (spec S1): depth is measured from the PRIOR opposite swing, never
+  # the following one, so a pivot's classification is known the instant it
+  # confirms. Exit spec S15's "next major level" target and S16's R:R gate both
+  # need it at signal time; a forward-looking depth would leave the target
+  # undefined exactly when the gate has to evaluate it.
   major_atr_multiple: 1.0
-  major_depth_reference: UNRESOLVED   # blocks structure.classify_swings()
+  major_depth_reference: prior_opposite_swing
 
 # --- S2 prior day / week high-low -----------------------------------------
 prior_levels:
@@ -154,12 +156,19 @@ three_tail:
   requires_nearby_level: false    # a cluster in open space is weaker evidence
                                   # and scores lower, but is not excluded
 
-# --- undefined in the specs, blocking implementation -----------------------
-# Both are referenced as if they exist -- engulfing carries a 0.80 base score
-# and is listed in Stage 1 gate 1; channel boundaries are a level_confluence
-# type -- but neither is defined anywhere in the four documents.
-# See docs/open_questions.md.
+# --- S20 engulfing ---------------------------------------------------------
+# Defined in spec S20. Body-to-body, NOT wick-to-wick: the current body must
+# fully cover the prior body, with opposite-coloured bars. The strength filter
+# is RELATIVE to the prior body (not an ATR floor like S7's), so a marginal
+# engulf of a tiny candle does not qualify as conviction.
 engulfing:
-  status: UNDEFINED_IN_SPEC
+  strength_multiplier: 1.3        # body[i] >= 1.3 x body[i-1]
+
+# --- channels: still undefined ---------------------------------------------
+# Scoring S3 counts "channel boundary" as a level_confluence type and the repo
+# structure lists parallel-channel logic under features/structure.py, but no
+# spec section defines construction or validity. Deferred by agreement:
+# confluence is a count capped at 3, so omitting channels degrades that term
+# slightly rather than breaking it.
 channels:
   status: UNDEFINED_IN_SPEC
