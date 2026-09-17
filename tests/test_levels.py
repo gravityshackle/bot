@@ -17,6 +17,7 @@ from features import levels
 from features.schema import load_params
 
 CT = "America/Chicago"
+PARAMS = load_params("MCL")
 
 
 def load_sym(name):
@@ -79,8 +80,8 @@ def test_prior_day_levels_differ_between_the_two_scopes():
     """The same bars must give different prior-day levels for MES vs MCL --
     this is the whole point of the scope split."""
     df = session_bars(rth_price=100.0, eth_price=200.0)
-    mes = levels.attach_prior_levels(df, load_sym("MES"))
-    mcl = levels.attach_prior_levels(df, load_sym("MCL"))
+    mes = levels.attach_prior_levels(df, load_sym("MES"), PARAMS)
+    mcl = levels.attach_prior_levels(df, load_sym("MCL"), PARAMS)
     day = sorted(df["trade_date"].unique())[2]
     mes_high = mes.loc[mes["trade_date"] == day, levels.PRIOR_DAY_HIGH].iloc[0]
     mcl_high = mcl.loc[mcl["trade_date"] == day, levels.PRIOR_DAY_HIGH].iloc[0]
@@ -95,7 +96,7 @@ def test_prior_day_levels_differ_between_the_two_scopes():
 def test_prior_day_high_equals_the_previous_days_scoped_high():
     df = session_bars(days=4)
     scfg = load_sym("MCL")                      # full-session scope, simplest
-    out = levels.attach_prior_levels(df, scfg)
+    out = levels.attach_prior_levels(df, scfg, PARAMS)
     dates = sorted(df["trade_date"].unique())
     for prev, cur in zip(dates, dates[1:]):
         expected_hi = df.loc[df["trade_date"] == prev, "high"].max()
@@ -106,7 +107,7 @@ def test_prior_day_high_equals_the_previous_days_scoped_high():
 
 
 def test_first_day_has_no_prior_levels():
-    out = levels.attach_prior_levels(session_bars(), load_sym("MCL"))
+    out = levels.attach_prior_levels(session_bars(), load_sym("MCL"), PARAMS)
     first = sorted(out["trade_date"].unique())[0]
     row = out[out["trade_date"] == first].iloc[0]
     assert pd.isna(row[levels.PRIOR_DAY_HIGH])
@@ -116,22 +117,68 @@ def test_first_day_has_no_prior_levels():
 def test_prior_day_level_never_uses_the_current_day():
     """A bar must not see its own session's range."""
     df = session_bars(days=4)
-    out = levels.attach_prior_levels(df, load_sym("MCL"))
+    out = levels.attach_prior_levels(df, load_sym("MCL"), PARAMS)
     for d in sorted(df["trade_date"].unique())[1:]:
         today_hi = df.loc[df["trade_date"] == d, "high"].max()
         got = out.loc[out["trade_date"] == d, levels.PRIOR_DAY_HIGH].iloc[0]
         assert got != pytest.approx(today_hi)
 
 
+def _thin_session(df, date, keep=3):
+    """Cut one trade date down to `keep` bars, as a weekend session would be."""
+    is_day = df["trade_date"] == date
+    drop = df.index[is_day][keep:]
+    return df.drop(index=drop).reset_index(drop=True)
+
+
+def test_prior_day_skips_a_thin_session():
+    """"Prior day" is the previous LIQUID session, not the previous trade date.
+
+    Regression: MET trades through weekends, so a naive shift-by-one made
+    Monday's prior-day levels come from Sunday's 81-144 bar session instead of
+    Friday's ~734 bar one. General rule; MET is only where it bites hardest.
+    """
+    df = session_bars(days=6)
+    dates = sorted(df["trade_date"].unique())
+    thin, following = dates[3], dates[4]
+    df = _thin_session(df, thin)
+
+    out = levels.attach_prior_levels(df, load_sym("MCL"), PARAMS)
+    got = out.loc[out["trade_date"] == following, levels.PRIOR_DAY_HIGH].iloc[0]
+
+    thin_high = df.loc[df["trade_date"] == thin, "high"].max()
+    liquid_high = df.loc[df["trade_date"] == dates[2], "high"].max()
+    assert got == pytest.approx(liquid_high), "must reach past the thin session"
+    assert got != pytest.approx(thin_high)
+
+
+def test_a_liquid_session_is_still_used_normally():
+    """The skip must not fire on ordinary sessions -- it is a rare correction."""
+    df = session_bars(days=6)
+    dates = sorted(df["trade_date"].unique())
+    out = levels.attach_prior_levels(df, load_sym("MCL"), PARAMS)
+    for prev, cur in zip(dates, dates[1:]):
+        expected = df.loc[df["trade_date"] == prev, "high"].max()
+        got = out.loc[out["trade_date"] == cur, levels.PRIOR_DAY_HIGH].iloc[0]
+        assert got == pytest.approx(expected)
+
+
+def test_early_sessions_qualify_before_a_median_exists():
+    """Unknown is not thin: with no prior history there is nothing to judge."""
+    df = session_bars(days=3)
+    ext = levels.period_extremes(df, load_sym("MCL"), df["trade_date"])
+    assert bool(levels.liquid_sessions(ext, PARAMS).iloc[0])
+
+
 def test_prior_day_level_is_constant_within_a_session():
-    out = levels.attach_prior_levels(session_bars(days=4), load_sym("MCL"))
+    out = levels.attach_prior_levels(session_bars(days=4), load_sym("MCL"), PARAMS)
     for _, g in out.groupby("trade_date"):
         assert g[levels.PRIOR_DAY_HIGH].nunique(dropna=False) == 1
 
 
 def test_weekly_levels_roll_at_week_start():
     df = session_bars(days=12, start="2026-03-02")   # spans two ISO weeks
-    out = levels.attach_prior_levels(df, load_sym("MCL"))
+    out = levels.attach_prior_levels(df, load_sym("MCL"), PARAMS)
     wk = levels.week_key(out["trade_date"])
     assert wk.nunique() >= 2
     first_week = sorted(wk.unique())[0]
@@ -146,7 +193,7 @@ def test_weekly_levels_roll_at_week_start():
 
 def test_weekly_level_is_constant_within_a_week():
     df = session_bars(days=12)
-    out = levels.attach_prior_levels(df, load_sym("MCL"))
+    out = levels.attach_prior_levels(df, load_sym("MCL"), PARAMS)
     wk = levels.week_key(out["trade_date"])
     for _, idx in out.groupby(wk).groups.items():
         assert out.loc[idx, levels.PRIOR_WEEK_HIGH].nunique(dropna=False) == 1

@@ -128,7 +128,7 @@ def test_bearish_rejection_mirrors():
 def test_bullish_engulfing_body_to_body():
     df = mk([(102.0, 102.5, 100.8, 101.0),      # red body 102 -> 101
              (100.9, 103.5, 100.5, 103.0)])     # green body 100.9 -> 103
-    e = triggers.engulfing(df, feats_of(df), P)
+    e = triggers.engulfing(df, feats_of(df), flat_atr(df), P)
     assert e.iloc[1] == triggers.LONG
 
 
@@ -137,20 +137,46 @@ def test_engulfing_ignores_wicks_not_bodies():
     still qualifies, because S20 is explicitly body-to-body."""
     df = mk([(102.0, 120.0, 80.0, 101.0),
              (100.9, 103.5, 100.5, 103.0)])
-    assert triggers.engulfing(df, feats_of(df), P).iloc[1] == triggers.LONG
+    assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] == triggers.LONG
 
 
 def test_marginal_engulf_fails_the_strength_filter():
     # prior body 1.0, current body 1.05 -> under the 1.3x requirement
     df = mk([(102.0, 102.5, 100.8, 101.0),
              (100.95, 102.4, 100.9, 102.0)])
-    assert triggers.engulfing(df, feats_of(df), P).iloc[1] is None
+    assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] is None
+
+
+def test_engulfing_of_a_doji_fails_the_absolute_floor():
+    """The relative multiplier alone has no floor.
+
+    Regression: an ordinary bar trivially clears 1.3x a one-tick body, so any
+    bar following a doji scored as an engulfing. On real data that degenerate
+    case, not genuine conviction, was the majority of all firings. ATR is 4
+    here, so the prior body must reach 0.10 x 4 = 0.4.
+    """
+    doji = (102.0, 102.6, 101.9, 101.75)        # body 0.25, under the floor
+    df = mk([doji, (101.7, 104.0, 101.6, 103.5)])
+    assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] is None
+
+    # identical geometry, but a prior body that clears the floor: fires
+    real = (102.0, 102.6, 101.3, 101.4)         # body 0.6 >= 0.4
+    df2 = mk([real, (101.3, 104.0, 101.2, 103.5)])
+    assert triggers.engulfing(df2, feats_of(df2), flat_atr(df2),
+                              P).iloc[1] == triggers.LONG
+
+
+def test_engulfing_needs_both_strength_conditions_not_either():
+    """A big prior body does not excuse a weak multiple, and vice versa."""
+    # prior body 2.0 clears the floor, current body 2.1 misses 1.3x
+    df = mk([(102.0, 102.5, 99.8, 100.0), (99.9, 102.3, 99.7, 102.0)])
+    assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] is None
 
 
 def test_same_colour_bars_never_engulf():
     df = mk([(100.0, 101.0, 99.9, 100.8),
              (99.5, 103.0, 99.4, 102.5)])      # both green
-    assert triggers.engulfing(df, feats_of(df), P).iloc[1] is None
+    assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] is None
 
 
 # --------------------------------------------------------------------------
@@ -244,10 +270,35 @@ def test_range_reclaim_shares_the_failed_breakout_math():
              (100, 101.5, 99.8, 101.0),
              (101, 101.2, 99.0, 99.4)])
     fb = triggers.failed_breakouts(df, 100.0, flat_atr(df), P)
-    rr = triggers.range_reclaims(df, 100.0, flat_atr(df), P)
+    rr = triggers.range_reclaims(df, 100.0, flat_atr(df), P, side="high")
     assert len(rr) == len(fb) == 1
     assert rr.iloc[0]["kind"] == "range_reclaim"
     assert rr.iloc[0]["direction"] == fb.iloc[0]["direction"]
+
+
+def test_range_reclaim_ignores_the_wrong_side_of_a_boundary():
+    """Closing BELOW the range high and back above is not a reclaim of it.
+
+    Regression: range_reclaims() inherited failed_breakouts()'s two-sided math,
+    so ordinary trade inside the range scored as a reclaim of its own upper
+    boundary. On real data that roughly doubled the count.
+    """
+    # dips below the 100 edge, then closes back above: inside-range noise
+    df = mk([(101, 101.5, 100.8, 101.0),
+             (100.5, 100.8, 98.5, 99.0),          # closes below the edge
+             (99.2, 101.4, 99.0, 101.0)])         # and back above
+    assert triggers.range_reclaims(df, 100.0, flat_atr(df), P, side="high").empty
+    # the same bars ARE a reclaim of a range LOW at 100
+    assert len(triggers.range_reclaims(df, 100.0, flat_atr(df), P,
+                                       side="low")) == 1
+    # and S8, on a discrete S/R level, still accepts both sides
+    assert len(triggers.failed_breakouts(df, 100.0, flat_atr(df), P)) == 1
+
+
+def test_range_reclaim_requires_an_explicit_side():
+    df = mk([(99, 99.5, 98.5, 99.0)])
+    with pytest.raises(ValueError):
+        triggers.range_reclaims(df, 100.0, flat_atr(df), P, side="upper")
 
 
 # --------------------------------------------------------------------------
@@ -315,27 +366,55 @@ def test_price_above_a_falling_ema_is_not_bullish():
 # S11 momentum continuation
 # --------------------------------------------------------------------------
 
+BELOW = (100.0, 100.4, 99.6, 100.0)      # closes under a 100.5 minor level
+CROSS = (100.0, 103.2, 99.9, 103.0)      # crosses it, body ratio ~0.91
+
+
+def _mom(rows, bias_val="bullish", vol_ok=True, level=100.5):
+    df = mk(rows)
+    n = len(rows)
+    return triggers.momentum_continuation(
+        df, feats_of(df), level, P,
+        pd.Series([bias_val] * n, index=df.index),
+        pd.Series([vol_ok] * n, index=df.index))
+
+
 def test_momentum_requires_trend_body_and_volume():
-    df = mk([(100.0, 103.2, 99.9, 103.0)])        # body ratio ~0.91
-    f = feats_of(df)
-    bias = pd.Series(["bullish"], index=df.index)
-    vol = pd.Series([True], index=df.index)
-    out = triggers.momentum_continuation(df, f, 100.5, P, bias, vol)
+    out = _mom([BELOW, CROSS])
     assert len(out) == 1 and out.iloc[0]["direction"] == triggers.LONG
+    assert out.iloc[0]["idx"] == 1, "fires on the bar that crosses"
 
 
 @pytest.mark.parametrize("bias_val,vol_ok,rows", [
-    ("neutral", True, [(100.0, 103.2, 99.9, 103.0)]),     # trend fails
-    ("bullish", False, [(100.0, 103.2, 99.9, 103.0)]),    # volume fails
-    ("bullish", True, [(100.0, 103.2, 99.9, 100.6)]),     # body ratio fails
+    ("neutral", True, [BELOW, CROSS]),                        # trend fails
+    ("bullish", False, [BELOW, CROSS]),                       # volume fails
+    ("bullish", True, [BELOW, (100.0, 103.2, 99.9, 100.6)]),  # body ratio fails
 ])
 def test_momentum_blocked_when_any_condition_fails(bias_val, vol_ok, rows):
-    df = mk(rows)
-    out = triggers.momentum_continuation(
-        df, feats_of(df), 100.5, P,
-        pd.Series([bias_val], index=df.index),
-        pd.Series([vol_ok], index=df.index))
-    assert out.empty
+    assert _mom(rows, bias_val, vol_ok).empty
+
+
+def test_momentum_fires_once_per_crossing_not_every_bar_beyond():
+    """S11 is an event, not a state.
+
+    Regression: written as a bare `close > minor_level` predicate this re-fired
+    on every later strong-bodied, volume-expanded bar while price simply stayed
+    beyond the level -- 2,000-4,300 firings per instrument on real data against
+    150-460 for the other selective triggers.
+    """
+    out = _mom([BELOW, CROSS, CROSS, CROSS])
+    assert len(out) == 1 and out.iloc[0]["idx"] == 1
+
+
+def test_momentum_can_fire_again_after_price_returns():
+    """Re-crossing is a new event; only staying beyond is not."""
+    out = _mom([BELOW, CROSS, BELOW, CROSS])
+    assert list(out["idx"]) == [1, 3]
+
+
+def test_momentum_first_bar_is_never_an_event():
+    """No prior bar means no transition to observe -- same rule as breakouts()."""
+    assert _mom([CROSS]).empty
 
 
 # --------------------------------------------------------------------------

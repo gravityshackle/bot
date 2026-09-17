@@ -198,19 +198,29 @@ def rejection(bars: pd.DataFrame, feats: pd.DataFrame, atr: pd.Series,
 # S20 engulfing
 # --------------------------------------------------------------------------
 
-def engulfing(bars: pd.DataFrame, feats: pd.DataFrame,
+def engulfing(bars: pd.DataFrame, feats: pd.DataFrame, atr: pd.Series,
               params: Params) -> pd.Series:
     """LONG / SHORT / None per bar (S20).
 
-    Body-to-body, not wick-to-wick, and the strength filter is RELATIVE to the
-    prior body rather than an ATR floor -- a small body engulfing an even
-    smaller one is noise, not conviction.
+    Body-to-body, not wick-to-wick. Two strength conditions, and S20 is
+    explicit that the combination is not optional:
+
+      relative  body[i]   >= strength_multiplier x body[i-1]
+      absolute  body[i-1] >= min_prior_body_atr_multiple x ATR
+
+    The relative test alone has no floor. 1.3x of a one-tick doji is still
+    almost nothing, so any ordinary bar following a doji "engulfs" it -- and on
+    real data that degenerate case, not genuine conviction, was the majority of
+    all engulfing firings. The absolute floor is on the PRIOR body: what has to
+    be meaningful is the body being swallowed, since that is what makes the
+    reversal informative.
     """
     mult = float(params.get("engulfing.strength_multiplier"))
+    min_prior = float(params.get("engulfing.min_prior_body_atr_multiple")) * atr
     o, c = bars["open"], bars["close"]
     po, pc = o.shift(1), c.shift(1)
     body, pbody = feats[BODY], feats[BODY].shift(1)
-    strong = body >= mult * pbody
+    strong = (body >= mult * pbody) & (pbody >= min_prior)
 
     bull = (pc < po) & (c > o) & (o <= pc) & (c >= po) & strong
     bear = (pc > po) & (c < o) & (o >= pc) & (c <= po) & strong
@@ -282,22 +292,31 @@ def three_tail(bars: pd.DataFrame, feats: pd.DataFrame, atr: pd.Series,
 
 def failed_breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
                      params: Params, *, window_key="failed_breakout.window_bars",
-                     kind="failed_breakout") -> pd.DataFrame:
+                     kind="failed_breakout", only: str | None = None
+                     ) -> pd.DataFrame:
     """Close beyond a level, then back through it within K bars (S8).
 
     The resulting trade is the OPPOSITE direction to the breakout: a failed
     breakout above resistance is a short.
 
+    `only` restricts which breakout leg counts: "up", "down", or None for both.
+    A discrete S/R level can fail from either side, so S8 leaves it None; a
+    range boundary cannot, which is what `range_reclaims()` uses it for.
+
     S10 range reclaim is the same math applied to a range edge, so it shares
     this implementation rather than duplicating it.
     """
+    if only not in (None, "up", "down"):
+        raise ValueError(f"only must be None|'up'|'down', got {only!r}")
     k = int(params.get(window_key))
     b = breakouts(bars, level, atr, params)
     events: list[TriggerEvent] = []
     close = bars["close"].to_numpy()
+    up_ok = only in (None, "up")
+    down_ok = only in (None, "down")
 
     for i in range(len(bars)):
-        if b["up_break"].iloc[i]:
+        if up_ok and b["up_break"].iloc[i]:
             for j in range(i + 1, min(i + 1 + k, len(bars))):
                 if close[j] < level:
                     events.append(TriggerEvent(
@@ -305,7 +324,7 @@ def failed_breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
                         level=level, price=float(close[j]),
                         meta={"breakout_idx": i, "bars_to_fail": j - i}))
                     break
-        elif b["down_break"].iloc[i]:
+        elif down_ok and b["down_break"].iloc[i]:
             for j in range(i + 1, min(i + 1 + k, len(bars))):
                 if close[j] > level:
                     events.append(TriggerEvent(
@@ -317,11 +336,25 @@ def failed_breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
 
 
 def range_reclaims(bars: pd.DataFrame, edge: float, atr: pd.Series,
-                   params: Params) -> pd.DataFrame:
-    """S10 -- functionally identical to S8, applied to a range boundary."""
+                   params: Params, side: str) -> pd.DataFrame:
+    """S10 -- S8's math applied to a range boundary, on that boundary's side.
+
+    `side` is which boundary `edge` is: "high" or "low". It is required, not
+    inferred, because nothing about a bare price says which edge it is.
+
+    Sharing S8's mechanism does not mean accepting either direction. A reclaim
+    of the range HIGH is an escape above it that reverts back below (a short);
+    a reclaim of the range LOW is an escape below that reverts back above (a
+    long). A close below the range high without ever exceeding it is ordinary
+    trade inside the range, not a reclaim of anything -- counting it roughly
+    doubled the real reclaim count on live data.
+    """
+    if side not in ("high", "low"):
+        raise ValueError(f"side must be 'high' or 'low', got {side!r}")
     return failed_breakouts(bars, edge, atr, params,
                             window_key="range_reclaim.window_bars",
-                            kind="range_reclaim")
+                            kind="range_reclaim",
+                            only="up" if side == "high" else "down")
 
 
 # --------------------------------------------------------------------------
@@ -373,6 +406,20 @@ def momentum_continuation(bars: pd.DataFrame, feats: pd.DataFrame,
 
     Unlike the reversal triggers this one is explicitly allowed to fire off a
     MINOR level (S11's own definition), which is why Stage 1 gate 2 exempts it.
+
+    **An event, not a state.** S11 is explicit that this fires on the bar where
+    the condition first becomes true and must not re-fire while it stays true,
+    using the identical shift-a-state pattern as `breakouts()`. Written as a
+    bare predicate, `close > minor_level` remains true for every bar that stays
+    beyond the level, so any later strong-bodied, volume-expanded bar re-fires
+    it indefinitely. Measured on real data that produced 2,000-4,300 firings
+    per instrument against 150-460 for the other selective triggers -- the
+    order-of-magnitude gap was the symptom.
+
+    So the STATE is "closed beyond the minor level" and the event is its
+    transition, exactly as S4 treats a level; the body, volume and trend
+    filters are then applied to the transition bar. As with `breakouts()`, the
+    first bar can never be an event: there is no prior bar to transition from.
     """
     min_ratio = float(params.get("momentum.min_body_ratio"))
     need_trend = bool(params.get("momentum.requires_trend_alignment"))
@@ -381,13 +428,17 @@ def momentum_continuation(bars: pd.DataFrame, feats: pd.DataFrame,
     strong = feats[BODY_RATIO] >= min_ratio
     vol_ok = volume_expanded if need_vol else pd.Series(True, index=bars.index)
 
-    up = bars["close"] > minor_level
-    down = bars["close"] < minor_level
+    up = (bars["close"] > minor_level).fillna(False)
+    down = (bars["close"] < minor_level).fillna(False)
+    # noqa: E712 below -- NaN must not pass as "was not beyond"
+    up_cross = up & (up.shift(1) == False)      # noqa: E712
+    down_cross = down & (down.shift(1) == False)  # noqa: E712
+
     bull_ok = (bias == "bullish") if need_trend else pd.Series(True, index=bars.index)
     bear_ok = (bias == "bearish") if need_trend else pd.Series(True, index=bars.index)
 
-    long_hit = (strong & vol_ok & up & bull_ok).fillna(False)
-    short_hit = (strong & vol_ok & down & bear_ok).fillna(False)
+    long_hit = (strong & vol_ok & up_cross & bull_ok).fillna(False)
+    short_hit = (strong & vol_ok & down_cross & bear_ok).fillna(False)
 
     events = [
         TriggerEvent(idx=i, ts=bars["ts"].iloc[i], kind="momentum",
@@ -411,7 +462,7 @@ def candle_triggers(bars: pd.DataFrame, feats: pd.DataFrame, atr: pd.Series,
     """
     out = pd.DataFrame(index=bars.index)
     out["rejection"] = rejection(bars, feats, atr, params)
-    out["engulfing"] = engulfing(bars, feats, params)
+    out["engulfing"] = engulfing(bars, feats, atr, params)
     tt = three_tail(bars, feats, atr, params)
     out["three_tail"] = pd.Series([None] * len(bars), index=bars.index,
                                   dtype="object")

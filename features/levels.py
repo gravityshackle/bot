@@ -82,19 +82,64 @@ def period_extremes(bars: pd.DataFrame, symbol_cfg: dict,
     })
 
 
-def attach_prior_levels(bars: pd.DataFrame, symbol_cfg: dict) -> pd.DataFrame:
+def liquid_sessions(extremes: pd.DataFrame, params: Params) -> pd.Series:
+    """Which sessions are liquid enough to serve as someone's "prior day" (S2).
+
+    A session qualifies when its bar count is at least `liquidity_floor_ratio`
+    of the rolling median trade-date bar count. The median excludes the session
+    being judged -- a thin session must not drag down the bar it is measured
+    against.
+
+    The earliest sessions have no prior history to form a median from. They
+    qualify: "not yet knowable" is not the same as "thin", and demoting them
+    would leave the start of every series with no prior-day levels at all.
+    """
+    ratio = float(params.get("prior_levels.liquidity_floor_ratio"))
+    window = int(params.get("prior_levels.liquidity_median_window_sessions"))
+    n = extremes["n_bars"].astype("float64")
+    median = n.shift(1).rolling(window, min_periods=1).median()
+    return ((n >= ratio * median) | median.isna()).rename("is_liquid")
+
+
+def prior_liquid_period(extremes: pd.DataFrame, params: Params) -> dict:
+    """Map each period to the most recent PRIOR liquid one (S2).
+
+    "Prior day" is the previous *liquid* session, not simply the previous trade
+    date. The two only differ where a thin session sits between two real ones,
+    but there it matters: MET trades through weekends, so a naive shift makes
+    Monday's prior-day levels come from Sunday's 81-144 bar session instead of
+    Friday's ~734 bar one, and every trigger keyed to those levels inherits it.
+
+    This is a general rule; MET is just where it bites hardest.
+    """
+    ok = liquid_sessions(extremes, params)
+    out: dict = {}
+    last = None
+    for pos, period in enumerate(extremes.index):
+        out[period] = last          # assigned before this period qualifies
+        if bool(ok.iloc[pos]):
+            last = period
+    return out
+
+
+def attach_prior_levels(bars: pd.DataFrame, symbol_cfg: dict,
+                        params: Params) -> pd.DataFrame:
     """Attach prior-day and prior-week H/L to every bar.
 
-    Each period's extremes are shifted forward one period before being mapped
-    back onto bars, so a bar never sees its own period's range.
+    Prior-day levels come from the most recent *liquid* prior session; weekly
+    levels shift by one week. Either way a bar never sees its own period.
     """
     out = bars.copy()
     td = out["trade_date"]
 
     daily = period_extremes(out, symbol_cfg, td)
-    prior_daily = daily.shift(1)
-    out[PRIOR_DAY_HIGH] = td.map(prior_daily["high"]).astype("float64")
-    out[PRIOR_DAY_LOW] = td.map(prior_daily["low"]).astype("float64")
+    prior = prior_liquid_period(daily, params)
+    prior_high = {d: (daily.at[p, "high"] if p is not None else np.nan)
+                  for d, p in prior.items()}
+    prior_low = {d: (daily.at[p, "low"] if p is not None else np.nan)
+                 for d, p in prior.items()}
+    out[PRIOR_DAY_HIGH] = td.map(prior_high).astype("float64")
+    out[PRIOR_DAY_LOW] = td.map(prior_low).astype("float64")
 
     wk = week_key(td)
     weekly = period_extremes(out, symbol_cfg, wk)
@@ -241,5 +286,5 @@ def apply(bars: pd.DataFrame, params: Params, symbol_cfg: dict,
     """Attach all S2 and S5 columns. S3 gaps are returned separately by
     find_gaps(), since a gap is a zone with a lifetime rather than a per-bar
     value."""
-    out = attach_prior_levels(bars, symbol_cfg)
+    out = attach_prior_levels(bars, symbol_cfg, params)
     return pd.concat([out, consolidation(bars, atr, atr_mean, params)], axis=1)

@@ -1,7 +1,10 @@
 # Open questions
 
-Items 1 and 2 are resolved and kept for the record; 3-6 are live.
-Items 7-9 were raised while building the trigger layer.
+Items 1, 2 and 7 are resolved and kept for the record; 3-6 are live.
+Items 7-9 were raised while building the trigger layer; 10-12 by the Phase 2
+validation run (`scripts/plot_triggers.py`) and are resolved in spec and code.
+Item 13 is the first piece of Signal Engine work, deliberately not patched
+into the feature layer.
 
 
 
@@ -215,8 +218,7 @@ behaviour, but "minimum" describes the opposite of what the rule does.
 
 ---
 
-## 7. §20 engulfing fires on 12-15% of bars — the filter does not do what
-its own rationale says
+## 7. ~~§20 engulfing fires on 12-15% of bars~~ — RESOLVED (spec §20)
 
 §20's strength filter is purely RELATIVE: `body[i] >= 1.3 x body[i-1]`. Its
 stated purpose is that "a marginal engulf of a tiny prior candle doesn't count
@@ -241,6 +243,14 @@ confirmation signal.
 **Recommendation:** add an absolute body floor to §20, mirroring §7. Not
 applied, because §20 is a defined spec rule and changing it is a spec decision,
 not an implementation one.
+
+**Resolved.** Spec §20 now requires both tests, and is explicit that the
+combination is not optional: `body[i] >= 1.3 x body[i-1]` AND
+`body[i-1] >= engulfing_min_prior_body` (default `0.10 x ATR(entry)`, config
+key `engulfing.min_prior_body_atr_multiple`). The floor is on the PRIOR body —
+what has to be meaningful is the body being swallowed. The validation run that
+settled it found the degenerate case directly: an ordinary bar following a
+one-tick doji cleared the multiplier by 83x.
 
 ---
 
@@ -273,3 +283,93 @@ A crossing now requires the previous bar to have closed on the other side. Same
 data, same level: 90 alerts, 34 confirmed / 54 failed / 2 expired. More
 failures than confirmations, which is the expected shape for a mode whose whole
 point is being stricter than §4.
+
+---
+
+## 10. RESOLVED in code: §11 momentum continuation is an event, not a state
+
+Same class of problem as items 8 and 9, found by `scripts/plot_triggers.py`.
+§11's level test was written as a bare predicate, so `close > minor_level`
+stayed true for every bar that remained beyond the level and any later
+strong-bodied, volume-expanded bar re-fired it.
+
+The count was the tell, not the code reading. Over 66 sessions per instrument:
+
+| trigger | firings per instrument |
+|---|---|
+| §11 momentum (before) | 2,232 - 4,379 |
+| §7 rejection | 157 - 219 |
+| §9 breakout/retest | 29 - 36 |
+| §19 three tail | 35 - 457 |
+
+An order of magnitude above every other selective trigger is a symptom, not a
+sign that momentum is simply more common. §11 now shifts the level-beyond
+state and fires on the transition, the identical pattern `breakouts()` uses.
+The body, volume and trend filters apply to the transition bar. As with §4,
+the first bar can never be an event.
+
+---
+
+## 11. RESOLVED in code: §10 range reclaim must match the boundary's side
+
+`range_reclaims()` delegated to `failed_breakouts()`, which accepts a close
+beyond the level in EITHER direction as the breakout leg. That is right for a
+discrete S/R level, which can fail from either side, and wrong for a range
+boundary, which cannot: a close *below* a range high without ever exceeding it
+is ordinary trade inside the range, and the return above then scored as a
+reclaim. Roughly 2x overcount on real data (MES 238 -> 116).
+
+`range_reclaims(bars, edge, atr, params, side)` now takes the boundary's side
+and is required, not inferred — nothing about a bare price says which edge it
+is. `failed_breakouts()` gained an `only` parameter to restrict the leg, and
+still defaults to both sides for §8.
+
+---
+
+## 12. RESOLVED in spec §2: "prior day" is the previous LIQUID session
+
+**Config:** `params.yaml > prior_levels.liquidity_floor_ratio` (0.50),
+`prior_levels.liquidity_median_window_sessions` (20)
+
+MET trades through weekends. Over the same window it produces 93 trade dates
+against 66 for the other six — 14 Saturdays and 13 Sundays carrying ~7.5% of
+its volume, straight through the 16:00-17:00 halt its own config declares. A
+shift-by-one therefore drew Monday's prior-day levels from Sunday's 81-144 bar
+session instead of Friday's ~734 bar one, and every trigger keyed to those
+levels inherited it.
+
+Resolved as a general rule, not a MET-specific patch: a session qualifies as
+someone's "prior day" only if its bar count reaches 50% of the rolling median
+trade-date bar count; otherwise the search skips further back. Whether thin
+sessions are skipped at all is decided (yes); the 50% is a tunable default.
+
+**Still open, minor:** the spec says "rolling median" without fixing the
+window. 20 sessions (~a trading month) is used and is a named config field. An
+expanding median over all prior sessions is the parameter-free alternative;
+either is defensible, and the choice barely moves the result for the six
+weekday instruments. Worth settling when Phase 4 grid-searches the floor.
+
+**Note:** MET's `session.globex_open` / `globex_close` / `maintenance_halt`
+still describe a Sun 17:00 - Fri 16:00 week with a daily halt, which the bars
+contradict. The fields are not read by the trade-date logic, so nothing is
+currently wrong because of it, but they should be corrected or explicitly
+marked as nominal before anything starts trusting them.
+
+---
+
+## 13. Timeframe config is not wired to anything — Signal Engine, first piece
+
+**Config:** `params.yaml > timeframes.entry`, `timeframes.htf`,
+`timeframes.daily`, `timeframes.three_tail`
+
+Only `timeframes.htf` is read (by `structure.swings()`). The rest are set and
+ignored: every detector runs on whatever frame its caller hands it, and callers
+hardcode `"5min"` / `"1D"`. §19 is the visible case — its own spec timeframe is
+10min, `candle_triggers()` runs it on the entry frame, and the two disagree
+(MET: 457 firings on 10min).
+
+This is deliberately NOT being patched into `triggers.py`. Deciding which
+detector runs on which frame, aligning them causally, and reconciling their
+outputs is multi-timeframe orchestration — the job the Signal Engine exists to
+do, and the first real piece of that build rather than a fix folded into the
+feature layer.
