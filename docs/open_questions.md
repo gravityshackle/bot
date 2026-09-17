@@ -246,11 +246,28 @@ not an implementation one.
 
 **Resolved.** Spec §20 now requires both tests, and is explicit that the
 combination is not optional: `body[i] >= 1.3 x body[i-1]` AND
-`body[i-1] >= engulfing_min_prior_body` (default `0.10 x ATR(entry)`, config
+`body[i-1] >= engulfing_min_prior_body` (default `0.50 x ATR(entry)`, config
 key `engulfing.min_prior_body_atr_multiple`). The floor is on the PRIOR body —
-what has to be meaningful is the body being swallowed. The validation run that
-settled it found the degenerate case directly: an ordinary bar following a
-one-tick doji cleared the multiplier by 83x.
+what has to be meaningful is the body being swallowed.
+
+The floor landed at 0.50 rather than the 0.10 first written into §20, and the
+measurement behind that first value was corrected in the same pass. One-tick
+dojis are a real contributor but not "the majority": 20.7% of MES firings,
+3.2% MGC, 31.7% MET. The broader problem is frequency. Share of the
+unfiltered count retained:
+
+| floor (× ATR) | MES | MGC | MET |
+|---|---|---|---|
+| 0.10 | 79.3% | 73.5% | 92.1% |
+| 0.30 | 34.5% | 29.1% | 43.7% |
+| 0.50 | 13.8% | 9.1% | 18.7% |
+
+At 0.10 engulfing still fired on 11.5% of bars against ~1% for §7 — the
+one-bar-in-seven problem this item opened with, largely intact. 0.50 puts it in
+the same order of magnitude as the other selective triggers. Still tunable, but
+a trigger firing on most bars is not structurally functioning as a trigger
+whatever a later backtest says, so the floor is a structural decision rather
+than a Phase 4 one.
 
 ---
 

@@ -176,12 +176,20 @@ three_tail:
 engulfing:
   strength_multiplier: 1.3        # body[i] >= 1.3 x body[i-1]
   # The relative multiplier alone has no floor: 1.3x of a one-tick doji is
-  # still almost nothing, so any ordinary bar "engulfs" it. Measured on real
-  # data, that degenerate case was the majority of all engulfing firings. The
-  # floor applies to the PRIOR body -- the body being swallowed is what has to
-  # be meaningful. Relative-plus-absolute is required; neither alone.
+  # still almost nothing, so any ordinary bar "engulfs" it. The floor applies
+  # to the PRIOR body -- the body being swallowed is what has to be
+  # meaningful. Relative-plus-absolute is required; neither alone.
+  #
+  # 0.50, not the 0.10 first written into S20. One-tick dojis are a real
+  # contributor but not the majority (20.7% of MES firings, 3.2% MGC, 31.7%
+  # MET), and the broader problem is frequency: at 0.10 the floor retains
+  # 73-92% of firings and engulfing still fires on 11.5% of bars against ~1%
+  # for S7 rejection. At 0.50 it retains 9-19%, which is the order of
+  # magnitude the other selective triggers occupy. A trigger present on one
+  # bar in seven is not evidence of anything regardless of what a backtest
+  # later says, so this is a structural floor, not a Phase 4 question.
   # sensitivity: HIGH
-  min_prior_body_atr_multiple: 0.10   # body[i-1] >= 0.10 x ATR(entry)
+  min_prior_body_atr_multiple: 0.50   # body[i-1] >= 0.50 x ATR(entry)
 
 # --- channels: still undefined ---------------------------------------------
 # Scoring S3 counts "channel boundary" as a level_confluence type and the repo

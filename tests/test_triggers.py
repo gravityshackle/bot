@@ -125,9 +125,17 @@ def test_bearish_rejection_mirrors():
 # S20 engulfing
 # --------------------------------------------------------------------------
 
+# ATR is 4.0 throughout this section, so S20's absolute floor on the PRIOR body
+# is 0.50 x 4 = 2.0. Every fixture below that is meant to FIRE therefore needs a
+# prior body of at least 2.0, or it is blocked by the floor rather than by the
+# condition the test is about.
+PRIOR_RED = (102.0, 102.5, 99.5, 99.8)        # body 2.2, clears the floor
+PRIOR_RED_WICKED = (102.0, 120.0, 80.0, 99.8)  # same body, absurd wicks
+
+
 def test_bullish_engulfing_body_to_body():
-    df = mk([(102.0, 102.5, 100.8, 101.0),      # red body 102 -> 101
-             (100.9, 103.5, 100.5, 103.0)])     # green body 100.9 -> 103
+    df = mk([PRIOR_RED,
+             (99.7, 103.5, 99.5, 103.0)])     # green body 3.3 >= 1.3 x 2.2
     e = triggers.engulfing(df, feats_of(df), flat_atr(df), P)
     assert e.iloc[1] == triggers.LONG
 
@@ -135,15 +143,15 @@ def test_bullish_engulfing_body_to_body():
 def test_engulfing_ignores_wicks_not_bodies():
     """Prior bar has a huge wick the current bar does not cover; body-to-body
     still qualifies, because S20 is explicitly body-to-body."""
-    df = mk([(102.0, 120.0, 80.0, 101.0),
-             (100.9, 103.5, 100.5, 103.0)])
+    df = mk([PRIOR_RED_WICKED, (99.7, 103.5, 99.5, 103.0)])
     assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] == triggers.LONG
 
 
 def test_marginal_engulf_fails_the_strength_filter():
-    # prior body 1.0, current body 1.05 -> under the 1.3x requirement
-    df = mk([(102.0, 102.5, 100.8, 101.0),
-             (100.95, 102.4, 100.9, 102.0)])
+    """Isolates the multiplier: the prior body clears the absolute floor, so
+    only the 1.3x test can reject this."""
+    # prior body 2.2 (>= 2.0 floor), current body 2.35 -> under 1.3 x 2.2 = 2.86
+    df = mk([PRIOR_RED, (99.75, 102.4, 99.7, 102.1)])
     assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] is None
 
 
@@ -151,26 +159,37 @@ def test_engulfing_of_a_doji_fails_the_absolute_floor():
     """The relative multiplier alone has no floor.
 
     Regression: an ordinary bar trivially clears 1.3x a one-tick body, so any
-    bar following a doji scored as an engulfing. On real data that degenerate
-    case, not genuine conviction, was the majority of all firings. ATR is 4
-    here, so the prior body must reach 0.10 x 4 = 0.4.
+    bar following a doji scored as an engulfing -- a real contributor to the
+    count (20.7% of MES firings) though not, as S20 first claimed, a majority
+    one. ATR is 4 here, so the prior body must reach 0.50 x 4 = 2.0.
     """
-    doji = (102.0, 102.6, 101.9, 101.75)        # body 0.25, under the floor
-    df = mk([doji, (101.7, 104.0, 101.6, 103.5)])
+    doji = (102.0, 102.6, 101.9, 101.75)        # body 0.25, far under the floor
+    df = mk([doji, (101.7, 104.0, 101.6, 103.5)])   # engulfs it 7x over
     assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] is None
 
-    # identical geometry, but a prior body that clears the floor: fires
-    real = (102.0, 102.6, 101.3, 101.4)         # body 0.6 >= 0.4
-    df2 = mk([real, (101.3, 104.0, 101.2, 103.5)])
+    # same geometry, prior body raised over the floor: fires
+    df2 = mk([PRIOR_RED, (99.7, 104.0, 99.5, 103.5)])
     assert triggers.engulfing(df2, feats_of(df2), flat_atr(df2),
                               P).iloc[1] == triggers.LONG
 
 
 def test_engulfing_needs_both_strength_conditions_not_either():
-    """A big prior body does not excuse a weak multiple, and vice versa."""
-    # prior body 2.0 clears the floor, current body 2.1 misses 1.3x
-    df = mk([(102.0, 102.5, 99.8, 100.0), (99.9, 102.3, 99.7, 102.0)])
-    assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] is None
+    """Neither test alone is sufficient; S20 says the combination is required.
+
+    Fails the floor only  -> blocked (huge multiple over a doji)
+    Fails the multiplier only -> blocked (real prior body, weak engulf)
+    Passes both -> fires
+    """
+    floor_only = mk([(102.0, 102.6, 101.9, 101.75),     # prior body 0.25
+                     (101.7, 104.0, 101.6, 103.5)])     # multiple ~7x
+    mult_only = mk([PRIOR_RED,                          # prior body 2.2
+                    (99.75, 102.4, 99.7, 102.1)])       # multiple 1.07x
+    both = mk([PRIOR_RED, (99.7, 103.5, 99.5, 103.0)])  # 2.2 and 1.5x
+
+    for df in (floor_only, mult_only):
+        assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] is None
+    assert triggers.engulfing(both, feats_of(both), flat_atr(both),
+                              P).iloc[1] == triggers.LONG
 
 
 def test_same_colour_bars_never_engulf():
