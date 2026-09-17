@@ -3,8 +3,8 @@
 Items 1, 2 and 7 are resolved and kept for the record; 3-6 are live.
 Items 7-9 were raised while building the trigger layer; 10-12 by the Phase 2
 validation run (`scripts/plot_triggers.py`) and are resolved in spec and code.
-Item 13 is the first piece of Signal Engine work, deliberately not patched
-into the feature layer.
+Item 13 was the first piece of Signal Engine work and has landed.
+
 
 
 
@@ -374,7 +374,7 @@ marked as nominal before anything starts trusting them.
 
 ---
 
-## 13. Timeframe config is not wired to anything — Signal Engine, first piece
+## 13. ~~Timeframe config is not wired to anything~~ — LANDED (signal_engine/timeframes.py)
 
 **Config:** `params.yaml > timeframes.entry`, `timeframes.htf`,
 `timeframes.daily`, `timeframes.three_tail`
@@ -390,3 +390,26 @@ detector runs on which frame, aligning them causally, and reconciling their
 outputs is multi-timeframe orchestration — the job the Signal Engine exists to
 do, and the first real piece of that build rather than a fix folded into the
 feature layer.
+
+**Landed** as `signal_engine/timeframes.py`, the first piece of the Signal
+Engine. `params.timeframes` now resolves into built, feature-attached frames;
+detectors ask for a ROLE (entry / htf / daily / three_tail) instead of naming a
+frequency, so Phase 4 can move a timeframe per instrument without touching
+feature code. `time_count.timeframes` is built too, since it names frequencies
+directly. `structure.htf_atr_at()` generalised to `structure.align_htf()` so
+there is still exactly one implementation of the HTF-close alignment rule —
+ATR was only its first caller, and S14's bias needed the same merge.
+
+Frames carry what is well-defined at their frequency: ATR, anatomy and CLV
+everywhere, volume expansion only on intraday frames, since S12's baseline is
+session-matched or hour-of-day and neither exists on daily bars. An absent
+column is safer than a meaningless one that something later trusts.
+
+`scripts/plot_triggers.py` builds through it, which is the proof it works: all
+counts unchanged except engulfing (the 0.50 floor), and S19 lands on 10min
+because the config says so rather than because the script resampled it.
+
+**Still open inside this:** `candle_triggers()` bundles S7/S19/S20 onto one
+frame, so it cannot honour a `three_tail` role that differs from `entry`.
+Splitting it is a decision about what the gates consume, so it belongs with
+`gates.py` rather than here.

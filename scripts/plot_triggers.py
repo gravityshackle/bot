@@ -51,17 +51,16 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data.pipeline import build_continuous, load_data_config  # noqa: E402
-from data.resample import resample  # noqa: E402
 from features import (  # noqa: E402
-    confirmation,
     confirmation_signal,
     levels,
-    risk_state,
     structure,
     triggers,
 )
+from signal_engine import timeframes  # noqa: E402
 from features.schema import (  # noqa: E402
     ATR,
+    ATR_MEAN,
     BODY,
     BODY_RATIO,
     CLV,
@@ -69,7 +68,6 @@ from features.schema import (  # noqa: E402
     UPPER_WICK,
     VOLUME_EXPANDED,
     VOLUME_RATIO,
-    load_params,
     tick_size,
 )
 
@@ -135,49 +133,38 @@ def _px(p):
 # ===========================================================================
 
 def build(symbol: str, cfg: dict):
-    """Everything the detectors need, assembled once per symbol."""
+    """Everything the detectors need, assembled once per symbol.
+
+    Frames come from `signal_engine.timeframes`, so this script sees exactly
+    the frames the Signal Engine will. It no longer names a frequency anywhere:
+    S19 lands on its configured 10min chart because the config says so, not
+    because this file resamples it that way.
+    """
     series, scfg, _ = build_continuous(symbol, cfg)
-    p = load_params(symbol)
+    tfs = timeframes.build(symbol, series.bars, scfg)
+    p = tfs.params
     period = int(p.get("atr.period"))
 
-    entry_tf = str(p.get("timeframes.entry"))
-    htf_tf = str(p.get("timeframes.htf"))
-    daily_tf = str(p.get("timeframes.daily"))
-    tt_tf = str(p.get("timeframes.three_tail"))
+    # S2/S3/S5 attach to the entry frame; ATR and its baseline are already on it
+    ltf = levels.apply(tfs.entry, p, scfg, tfs.entry[ATR], tfs.entry[ATR_MEAN])
+    htf = tfs.frame("htf")
 
-    ltf = resample(series.bars, entry_tf, scfg)
-    ltf = confirmation.apply(ltf, p, scfg)
-    a = risk_state.atr(ltf, period)
-    _, amean = risk_state.volatility_regime(
-        a, int(p.get("atr.regime_mean_window")),
-        float(p.get("atr.high_vol_ratio")), float(p.get("atr.low_vol_ratio")))
-    ltf = levels.apply(ltf, p, scfg, a, amean)
-    ltf[ATR] = a
+    piv = structure.swings(ltf, p, htf=htf, htf_atr=tfs.atr("htf"))
+    # S14 crosses timeframes through the one causal merge, same as swing sizing
+    bias = tfs.align("htf", triggers.trend_bias(htf, p), name="trend_bias")
 
-    htf = resample(series.bars, htf_tf, scfg)
-    htf_atr = risk_state.atr(htf, period)
-    daily = resample(series.bars, daily_tf, scfg)
+    gaps = levels.find_gaps(
+        ltf, scfg, levels.daily_atr_by_date(tfs.frame("daily"), period), p)
 
-    piv = structure.swings(ltf, p, htf=htf, htf_atr=htf_atr)
+    tt = tfs.frame("three_tail")
+    tt_events = triggers.three_tail(tt, _feats(tt), tt[ATR], p)
 
-    # Same causal alignment the swing sizing uses: an LTF bar may only see HTF
-    # bars that have CLOSED. htf_atr_at() is generic over the series it carries.
-    bias = structure.htf_atr_at(ltf, htf, triggers.trend_bias(htf, p), htf_tf)
-
-    gaps = levels.find_gaps(ltf, scfg,
-                            levels.daily_atr_by_date(daily, period), p)
-
-    # S19 on its own timeframe. params.timeframes.three_tail says 10min and
-    # nothing in features/ reads it -- see the report.
-    tt = resample(series.bars, tt_tf, scfg)
-    tt_feats = confirmation.candle_anatomy(tt).assign(**{CLV: confirmation.clv(tt)})
-    tt_atr = risk_state.atr(tt, period)
-    tt_events = triggers.three_tail(tt, tt_feats, tt_atr, p)
-
-    return dict(symbol=symbol, scfg=scfg, p=p, ltf=ltf, atr=a, htf=htf,
-                daily=daily, piv=piv, bias=bias, gaps=gaps,
-                tt=tt, tt_atr=tt_atr, tt_events=tt_events,
-                entry_tf=entry_tf, htf_tf=htf_tf, tt_tf=tt_tf)
+    return dict(symbol=symbol, scfg=scfg, p=p, tfs=tfs, ltf=ltf,
+                atr=ltf[ATR], htf=htf, daily=tfs.frame("daily"),
+                piv=piv, bias=bias, gaps=gaps,
+                tt=tt, tt_atr=tt[ATR], tt_events=tt_events,
+                entry_tf=tfs.freq("entry"), htf_tf=tfs.freq("htf"),
+                tt_tf=tfs.freq("three_tail"))
 
 
 def _feats(df: pd.DataFrame) -> pd.DataFrame:
@@ -991,27 +978,21 @@ against it.
    80x. An absolute floor on the PRIOR body now runs alongside the multiplier;
    the spec is explicit that the combination is not optional.
 
-   **The default floor does not yet deliver the spec's stated intent, and the
-   measurement should be corrected.** S20 says the degenerate case was driving
-   "the majority" of the engulfing count. It is not: one-tick prior bodies are
-   20.7% of MES firings, 3.2% of MGC, 31.7% of MET. At the spec's default
-   `0.10 x ATR` the floor removes 21% on MES (2,614 -> 2,074) and engulfing
-   still fires on 11.5% of bars, against ~1% for S7 rejection -- the comparison
-   open question 7 raised in the first place. Share of firings kept, by floor:
+   The floor is `0.50 x ATR`, not the `0.10` first written into S20, and the
+   measurement behind that first value was corrected with it. One-tick prior
+   bodies are a real contributor but not "the majority": 20.7% of MES firings,
+   3.2% MGC, 31.7% MET. The broader problem was frequency. Share of the
+   unfiltered count retained:
 
    | floor (x ATR) | MES | MGC | MET |
    |---|---|---|---|
-   | 0.05 | 96.6% | 87.7% | 99.6% |
-   | 0.10 (default) | 79.3% | 73.5% | 92.1% |
-   | 0.20 | 53.1% | 47.4% | 61.2% |
+   | 0.10 | 79.3% | 73.5% | 92.1% |
    | 0.30 | 34.5% | 29.1% | 43.7% |
-   | 0.50 | 13.8% | 9.1% | 18.7% |
+   | 0.50 (default) | 13.8% | 9.1% | 18.7% |
 
-   Roughly `0.50 x ATR` is what brings engulfing to ~1-2% of bars, i.e. to a
-   selective trigger's frequency. The floor is a declared tunable, so this is a
-   Phase 4 input rather than a spec contradiction -- but the default was chosen
-   against an overestimate of the degenerate case's share, and 0.10 leaves the
-   original "fires on one bar in seven" problem largely intact.
+   At 0.10 engulfing still fired on 11.5% of bars against ~1% for S7 -- the
+   one-bar-in-seven problem open question 7 opened with, largely intact. 0.50
+   puts it in the same order as the other selective triggers.
 
 4. **"Prior day" meant the previous trade date, not the previous liquid
    session.** FIXED, as a general rule rather than a MET patch. MET produces 93
@@ -1022,16 +1003,19 @@ against it.
    bar one. A session now qualifies only at >= 50% of the rolling median bar
    count; otherwise the search skips further back.
 
-Two items remain open, neither a patch to `features/`:
+5. **The timeframe config had nothing behind it.** RESOLVED, as the first piece
+   of the Signal Engine rather than a patch to `triggers.py`.
+   `signal_engine/timeframes.py` now resolves `params.timeframes` into built,
+   feature-attached frames and aligns higher-timeframe values back onto the
+   entry frame through the one causal merge. Detectors ask for a ROLE -- entry,
+   htf, daily, three_tail -- instead of naming a frequency, so Phase 4 can move
+   a timeframe per instrument without editing feature code. This script builds
+   through it, which is why S19 lands on its configured 10min chart here: the
+   config says so, not the script.
 
-5. **The timeframe config is not wired to anything.** `timeframes.three_tail`
-   (10min), `timeframes.entry` and `timeframes.daily` are set in `params.yaml`
-   and read by nobody -- every detector runs on whatever frame its caller hands
-   it, and callers hardcode. This is not a bug to fold into `triggers.py`; it
-   is the multi-timeframe orchestration the Signal Engine exists to do, and it
-   is the first real piece of that build. Until it lands, S19's counts here
-   (evaluated on the configured 10min bars) will not match a
-   `candle_triggers()` run on the entry frame.
+   Still open inside that: `candle_triggers()` bundles S7/S19/S20 and runs all
+   three on one frame, so it cannot honour a three_tail role that differs from
+   entry. Splitting it is a Signal Engine decision about what the gates consume.
 
 6. **The per-bar loops cost real time.** `failed_breakouts()` and
    `breakout_retests()` do a DataFrame column lookup per bar

@@ -61,25 +61,40 @@ def find_pivots(df: pd.DataFrame, n: int) -> pd.DataFrame:
     return out.sort_values(["confirmed_idx", "idx"]).reset_index(drop=True)
 
 
-def htf_atr_at(ltf: pd.DataFrame, htf: pd.DataFrame, htf_atr: pd.Series,
-               htf_freq: str) -> pd.Series:
-    """Align a higher-timeframe ATR onto lower-timeframe bars, causally.
+def align_htf(ltf: pd.DataFrame, htf: pd.DataFrame, values: pd.Series,
+              htf_freq: str, name: str = "htf_value") -> pd.Series:
+    """Align ANY higher-timeframe series onto lower-timeframe bars, causally.
 
     Resampled bars are stamped with their OPEN time, so an HTF bar opening at
     t0 is not complete until t0 + freq. An LTF bar at time t may therefore only
     use HTF bars whose CLOSE is <= t. Aligning on open time instead would leak
     the currently-forming HTF bar into every LTF bar inside it.
+
+    This is the single implementation of that rule. ATR was the first caller,
+    but nothing here is ATR-specific: the trend bias (S14) and any other
+    higher-timeframe value must cross timeframes the same way, and a second
+    copy of this merge is exactly how one of them would quietly start aligning
+    on open time instead.
+
+    `values` may hold labels as well as numbers -- an object series of
+    "bullish"/"bearish"/"neutral" aligns identically.
     """
     step = pd.Timedelta(htf_freq)
     right = pd.DataFrame({
         "htf_close_ts": htf["ts"] + step,
-        "htf_atr": htf_atr.to_numpy(),
+        "value": values.to_numpy(),
     }).dropna().sort_values("htf_close_ts")
 
     left = pd.DataFrame({"ts": ltf["ts"]}).sort_values("ts")
     merged = pd.merge_asof(left, right, left_on="ts", right_on="htf_close_ts",
                            direction="backward")
-    return pd.Series(merged["htf_atr"].to_numpy(), index=ltf.index, name="htf_atr")
+    return pd.Series(merged["value"].to_numpy(), index=ltf.index, name=name)
+
+
+def htf_atr_at(ltf: pd.DataFrame, htf: pd.DataFrame, htf_atr: pd.Series,
+               htf_freq: str) -> pd.Series:
+    """S1's HTF ATR alignment -- `align_htf()` under its original name."""
+    return align_htf(ltf, htf, htf_atr, htf_freq, name="htf_atr")
 
 
 def classify_swings(pivots: pd.DataFrame, atr_at_pivot: pd.Series,
