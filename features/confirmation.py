@@ -47,7 +47,11 @@ def clv(df: pd.DataFrame) -> pd.Series:
 
 
 def candle_anatomy(df: pd.DataFrame) -> pd.DataFrame:
-    """Body, wicks and body ratio -- shared by S7, S11 and S19."""
+    """Body, wicks and body ratio -- shared by S7, S11, S19 and S20.
+
+    Wick-vs-body comparisons go through `wick_dominates()`, never a bare
+    `wick >= ratio * body`; see there for why.
+    """
     body = (df["close"] - df["open"]).abs()
     upper = df["high"] - df[["open", "close"]].max(axis=1)
     lower = df[["open", "close"]].min(axis=1) - df["low"]
@@ -58,6 +62,20 @@ def candle_anatomy(df: pd.DataFrame) -> pd.DataFrame:
         LOWER_WICK: lower,
         BODY_RATIO: (body / rng).where(rng > 0, 0.0),
     }, index=df.index)
+
+
+def wick_dominates(wick: pd.Series, body: pd.Series, ratio: float) -> pd.Series:
+    """Whether a wick is at least `ratio` times the body AND actually exists.
+
+    The ratio alone is satisfied by a wick of zero whenever the body is zero:
+    `0 >= 2 x 0`. Every doji then "has" a dominant wick on its bare side, and
+    a zero-range bar has one on both -- on real data that made thin-market
+    O=H=L=C runs into simultaneous upper and lower S19 clusters. A wick has to
+    have length before its proportion to anything means something.
+
+    Unknown (NaN) inputs are not a dominant wick.
+    """
+    return ((wick > 0) & (wick >= ratio * body)).fillna(False)
 
 
 def classify_session(df: pd.DataFrame, symbol_cfg: dict) -> pd.Series:

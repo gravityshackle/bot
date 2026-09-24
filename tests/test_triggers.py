@@ -5,12 +5,14 @@ than whatever a random walk happened to produce.
 """
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from features import confirmation, triggers
-from features.schema import load_params
+from features.schema import Params, load_params
 
 CT = "America/Chicago"
 P = load_params("MES")          # tick 0.25
@@ -198,6 +200,38 @@ def test_same_colour_bars_never_engulf():
     assert triggers.engulfing(df, feats_of(df), flat_atr(df), P).iloc[1] is None
 
 
+def edge_params(**dotted):
+    """MES params with `section__key=value` overrides -- for pinning that a
+    guard holds when a Phase 4 grid pushes its neighbouring tunables to 0."""
+    values = copy.deepcopy(P.values)
+    for k, v in dotted.items():
+        section, key = k.split("__")
+        values[section][key] = v
+    return Params(values=values, symbol="MES")
+
+
+def test_zero_range_bar_is_not_a_rejection_with_the_filters_at_zero():
+    """At defaults S7 is shielded twice -- the body floor and the CLV
+    threshold both reject a zero-range bar -- but only by those tunables. With
+    both at 0 the bare lower side "dominated" the zero body and it fired LONG.
+    """
+    p = edge_params(rejection__min_body_atr_multiple=0.0,
+                    rejection__clv_threshold=0.0)
+    df = mk([(100.0, 100.0, 100.0, 100.0)])
+    assert triggers.rejection(df, feats_of(df), flat_atr(df), p).isna().all()
+
+
+def test_dojis_neither_engulf_nor_are_engulfed_with_the_floor_at_zero():
+    """S20 compares bodies, not wicks, and its strict direction tests
+    (close > open, prior close < prior open) already exclude a zero body on
+    either side. Pinned so a later loosening to >= cannot reintroduce it."""
+    p = edge_params(engulfing__min_prior_body_atr_multiple=0.0)
+    flat = (100.0, 100.0, 100.0, 100.0)
+    df = mk([flat, (99.0, 101.0, 98.0, 101.0), (101.0, 101.0, 101.0, 101.0),
+             flat])
+    assert triggers.engulfing(df, feats_of(df), flat_atr(df), p).isna().all()
+
+
 # --------------------------------------------------------------------------
 # S19 three tail
 # --------------------------------------------------------------------------
@@ -251,6 +285,24 @@ def test_large_body_disqualifies_a_tail_bar():
     df = mk(rows)
     t = triggers.tail_bars(df, feats_of(df), flat_atr(df), P)
     assert not t["lower"].any() and not t["upper"].any()
+
+
+def test_zero_range_bar_is_not_a_tail_on_either_side():
+    """Regression, found on real data: an O=H=L=C bar passed `0 >= 2 x 0` on
+    both sides, so three of them in a row -- routine in a thin market -- made
+    an upper AND a lower cluster. Most of MET's two-sided S19 bars."""
+    df = mk([(100.0, 100.0, 100.0, 100.0)] * 6)
+    t = triggers.tail_bars(df, feats_of(df), flat_atr(df), P)
+    assert not t["lower"].any() and not t["upper"].any()
+    assert triggers.three_tail(df, feats_of(df), flat_atr(df), P).empty
+
+
+def test_doji_is_a_tail_only_on_the_side_it_has_a_wick():
+    """A gravestone doji (open = close = low) has an upper tail and no lower
+    one. The bare side used to qualify too, on every instrument."""
+    df = mk([(100.0, 102.0, 100.0, 100.0)])
+    t = triggers.tail_bars(df, feats_of(df), flat_atr(df), P)
+    assert bool(t["upper"].iloc[0]) and not bool(t["lower"].iloc[0])
 
 
 # --------------------------------------------------------------------------

@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from features.confirmation import wick_dominates
 from features.schema import (
     BODY,
     BODY_RATIO,
@@ -185,8 +186,10 @@ def rejection(bars: pd.DataFrame, feats: pd.DataFrame, atr: pd.Series,
 
     body = feats[BODY]
     big_enough = body >= min_body
-    bull = (feats[CLV] >= clv_t) & (feats[LOWER_WICK] >= ratio * body) & big_enough
-    bear = (feats[CLV] <= -clv_t) & (feats[UPPER_WICK] >= ratio * body) & big_enough
+    bull = ((feats[CLV] >= clv_t)
+            & wick_dominates(feats[LOWER_WICK], body, ratio) & big_enough)
+    bear = ((feats[CLV] <= -clv_t)
+            & wick_dominates(feats[UPPER_WICK], body, ratio) & big_enough)
 
     out = pd.Series([None] * len(bars), index=bars.index, dtype="object")
     out[bull.fillna(False)] = LONG
@@ -243,8 +246,10 @@ def tail_bars(bars: pd.DataFrame, feats: pd.DataFrame, atr: pd.Series,
     body = feats[BODY]
     small_body = body <= max_body
     return pd.DataFrame({
-        "upper": ((feats[UPPER_WICK] >= ratio * body) & small_body).fillna(False),
-        "lower": ((feats[LOWER_WICK] >= ratio * body) & small_body).fillna(False),
+        "upper": (wick_dominates(feats[UPPER_WICK], body, ratio)
+                  & small_body).fillna(False),
+        "lower": (wick_dominates(feats[LOWER_WICK], body, ratio)
+                  & small_body).fillna(False),
     }, index=bars.index)
 
 

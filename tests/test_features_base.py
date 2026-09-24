@@ -70,6 +70,25 @@ def test_clv_is_bounded():
 
 
 # --------------------------------------------------------------------------
+# wick dominance (S7, S19)
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("wick,body,expected", [
+    (2.0, 1.0, True),          # exactly 2x
+    (1.9, 1.0, False),
+    (1.0, 0.0, True),          # a real wick on a doji dominates it
+    (0.0, 0.0, False),         # regression: 0 >= 2 x 0 is not a wick
+    (0.0, 0.5, False),
+])
+def test_wick_dominates(wick, body, expected):
+    """`wick >= ratio x body` alone is satisfied by a wick that does not
+    exist whenever the body is zero -- every doji then "has" a dominant wick
+    on its bare side, and a zero-range bar has one on both."""
+    got = confirmation.wick_dominates(pd.Series([wick]), pd.Series([body]), 2.0)
+    assert bool(got.iloc[0]) is expected
+
+
+# --------------------------------------------------------------------------
 # S15 ATR
 # --------------------------------------------------------------------------
 

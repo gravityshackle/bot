@@ -425,19 +425,37 @@ not moved.
 
 ---
 
-## 14. OPEN: §19 on a bar that completes BOTH an upper and a lower cluster
+## 14. RESOLVED in spec §19 + code: two-sided §19 bars, and bare-side "tails"
 
 `three_tail()` can emit a SHORT and a LONG event on the same bar. The old
 `candle_triggers()` wrote them per bar with the last write winning, so every such
-bar silently came out LONG. On real 10min data: MES 9 of 83 S19 bars, MYM 7/79,
-MGC 4/34, MNQ 1/37, and MET 149/300. `signal_engine/candles.py` now labels these
-`both` rather than picking a side. **§19 does not say what a two-sided cluster
-means.** Contradictory evidence, most likely no trade, but that is a spec
-decision, and gates.py must handle `both` explicitly rather than fall through.
+bar silently came out LONG. `signal_engine/candles.py` labels them `both`.
+**Spec §19 now rules:** a two-sided bar is NO TRADE, excluded from the directional
+signal, on the same principle as nullable `is_major`. gates.py treats `both` as
+its own non-directional case and never falls through to a side.
 
-**Related detector bug, not yet fixed:** `tail_bars()` accepts a zero-range bar
-(O=H=L=C) as BOTH an upper and a lower tail. `0 >= 2.0 × 0` passes the wick
-ratio, and a zero body passes `max_body_atr_multiple`. Thin instruments print
-these constantly, which is most of MET's two-sided count. A tail needs a wick of
-non-zero length, so this wants its own failing-test-first fix in
-`features/triggers.py`.
+**The degenerate input behind most of them is fixed at the shared anatomy
+layer.** `wick >= ratio × body` passes for a wick of ZERO whenever the body is
+zero (`0 >= 2.0 × 0`). So every doji "had" a dominant wick on its bare side, and
+an O=H=L=C bar had one on both. The guard is broader than zero-range bars: a wick
+must have length (`confirmation.wick_dominates()`), and both S7 and S19 go
+through it. Real 10min data, before → after:
+
+| | MCL | MES | MET | MGC | MNQ | MYM | SIL |
+|---|---|---|---|---|---|---|---|
+| S19 bars | 35 → 35 | 83 → 83 | **306 → 36** | 34 → 34 | 37 → 37 | 79 → 79 | 41 → 41 |
+| two-sided | 0 → 0 | 9 → 9 | **151 → 0** | 4 → 4 | 2 → 2 | 8 → 8 | 0 → 0 |
+
+MET's worst in-session delivery lag fell from 9h10m to 20min: that lag came from
+the same degenerate bars, not a separate issue. S7 and S20 counts are unchanged
+on every instrument. At defaults S7's body floor and CLV threshold already
+excluded these bars, and S20 compares bodies with strict inequalities. Both are
+pinned by tests that push the neighbouring tunables to 0, which a Phase 4 grid
+could reach.
+
+**What remains two-sided on liquid instruments is real wicks on BOTH sides of a
+zero-body doji.** Any wick against a zero body is an infinite ratio, so the
+ratio test cannot tell a 1-tick wick from a 3-point one. These are excluded as
+no-trade under the §19 ruling above, which is the correct outcome. The open
+question: should a tail also need a minimum wick length in ATR terms? That would
+be a new tunable, so it is a spec decision.
