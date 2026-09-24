@@ -448,24 +448,3 @@ def momentum_continuation(bars: pd.DataFrame, feats: pd.DataFrame,
         for i in range(len(bars)) if long_hit.iloc[i] or short_hit.iloc[i]
     ]
     return _events_frame(events)
-
-
-# --------------------------------------------------------------------------
-# level-free patterns, as one frame
-# --------------------------------------------------------------------------
-
-def candle_triggers(bars: pd.DataFrame, feats: pd.DataFrame, atr: pd.Series,
-                    params: Params) -> pd.DataFrame:
-    """S7, S19 and S20 -- the patterns that need no level to be detected.
-
-    Whether each one occurred AT a level is Stage 1 gate 2's decision.
-    """
-    out = pd.DataFrame(index=bars.index)
-    out["rejection"] = rejection(bars, feats, atr, params)
-    out["engulfing"] = engulfing(bars, feats, atr, params)
-    tt = three_tail(bars, feats, atr, params)
-    out["three_tail"] = pd.Series([None] * len(bars), index=bars.index,
-                                  dtype="object")
-    if not tt.empty:
-        out.loc[tt["idx"].to_numpy(), "three_tail"] = tt["direction"].to_numpy()
-    return out

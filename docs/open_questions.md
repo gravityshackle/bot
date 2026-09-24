@@ -409,7 +409,35 @@ column is safer than a meaningless one that something later trusts.
 counts unchanged except engulfing (the 0.50 floor), and S19 lands on 10min
 because the config says so rather than because the script resampled it.
 
-**Still open inside this:** `candle_triggers()` bundles S7/S19/S20 onto one
-frame, so it cannot honour a `three_tail` role that differs from `entry`.
-Splitting it is a decision about what the gates consume, so it belongs with
-`gates.py` rather than here.
+**~~Still open inside this~~ — RESOLVED before gates.py:** `candle_triggers()`
+bundled S7/S19/S20 onto one frame, so it could not honour a `three_tail` role
+that differs from `entry`. It had no production caller, so the bug was latent
+until gates.py called it. It moved to `signal_engine/candles.py` and takes a
+`TimeframeSet`: S7/S20 read the entry frame, and S19 reads the `three_tail`
+frame and crosses back through `TimeframeSet.align_events()`. That method is
+new, because `align()` forward-fills, which is right for a state like S14's bias
+and wrong for an event: S19 would re-fire on every entry bar until the next
+10min close, which is the §11 bug again. An event lands on exactly one entry bar,
+the first at which its bar has closed, and it is dropped rather than carried into
+the next session. The bound is the session, not a time window: a one-step window
+dropped 81 of MET's 306 S19 bars during mid-session quiet spells when price had
+not moved.
+
+---
+
+## 14. OPEN: §19 on a bar that completes BOTH an upper and a lower cluster
+
+`three_tail()` can emit a SHORT and a LONG event on the same bar. The old
+`candle_triggers()` wrote them per bar with the last write winning, so every such
+bar silently came out LONG. On real 10min data: MES 9 of 83 S19 bars, MYM 7/79,
+MGC 4/34, MNQ 1/37, and MET 149/300. `signal_engine/candles.py` now labels these
+`both` rather than picking a side. **§19 does not say what a two-sided cluster
+means.** Contradictory evidence, most likely no trade, but that is a spec
+decision, and gates.py must handle `both` explicitly rather than fall through.
+
+**Related detector bug, not yet fixed:** `tail_bars()` accepts a zero-range bar
+(O=H=L=C) as BOTH an upper and a lower tail. `0 >= 2.0 × 0` passes the wick
+ratio, and a zero body passes `max_body_atr_multiple`. Thin instruments print
+these constantly, which is most of MET's two-sided count. A tail needs a wick of
+non-zero length, so this wants its own failing-test-first fix in
+`features/triggers.py`.

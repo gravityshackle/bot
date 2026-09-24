@@ -1013,9 +1013,10 @@ against it.
    through it, which is why S19 lands on its configured 10min chart here: the
    config says so, not the script.
 
-   Still open inside that: `candle_triggers()` bundles S7/S19/S20 and runs all
-   three on one frame, so it cannot honour a three_tail role that differs from
-   entry. Splitting it is a Signal Engine decision about what the gates consume.
+   The bundled `candle_triggers()` that ran S7/S19/S20 on one frame is gone.
+   `signal_engine/candles.py` reads each pattern on its own role's frame and
+   delivers S19 onto entry as a one-bar event. This script already evaluated
+   S19 on its own frame, so no count here changes.
 
 6. **The per-bar loops cost real time.** `failed_breakouts()` and
    `breakout_retests()` do a DataFrame column lookup per bar

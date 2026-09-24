@@ -145,6 +145,50 @@ class TimeframeSet:
         return structure.align_htf(self.entry, self.frames[freq], values, freq,
                                    name=name or f"{role}_value")
 
+    def align_events(self, role: str, values: pd.Series,
+                     name: str | None = None) -> tuple[pd.Series, pd.Series]:
+        """Put EVENTS detected on `role`'s frame onto the entry frame.
+
+        `align()` forward-fills, which is right for a state like S14's bias and
+        wrong for an event: every entry bar inside the next HTF bar would
+        re-fire it, which is the S11 failure again. Here an event lands on
+        exactly one entry bar -- the first at which its HTF bar is visible
+        under the same close-time rule `align()` uses, since visibility is
+        taken from `align()` itself rather than recomputed.
+
+        An event whose next entry bar falls in a LATER SESSION is dropped, not
+        carried over: a cluster completing on the last bar before the close
+        would otherwise arrive at the next open reading as fresh. The bound is
+        the session rather than a time window on purpose. A thin market can
+        go ten minutes without a print mid-session, and no prints means price
+        has not moved -- a one-HTF-step window dropped 81 of MET's 306 S19
+        bars that way, all of them still current.
+
+        Returns (value, source bar's open ts), both indexed on the entry
+        frame. The source ts is kept because crossing the boundary otherwise
+        destroys it, and anything judging WHERE the pattern formed -- Stage 1
+        gate 2 -- needs the bar it formed on, not the entry bar it landed on.
+        """
+        name = name or f"{role}_event"
+        freq = self.freq(role)
+        src = self.frames[freq]
+        if freq == self.freq(ENTRY):
+            return (values.rename(name),
+                    src["ts"].where(values.notna()).rename(f"{name}_ts"))
+
+        carried = pd.Series(src["ts"].to_numpy(), index=src.index)
+        seen = pd.to_datetime(self.align(role, carried), utc=True)
+        fresh = seen.notna() & (seen != seen.shift(1))
+        src_session = seen.map(pd.Series(src["trade_date"].to_numpy(),
+                                         index=src["ts"]))
+        land = fresh & (src_session == self.entry["trade_date"])
+
+        by_open = pd.Series(values.to_numpy(), index=src["ts"])
+        value = seen.map(by_open).where(land)
+        value = value.astype("object").where(value.notna(), None)
+        src_ts = seen.where(land & value.notna())
+        return value.rename(name), src_ts.rename(f"{name}_ts")
+
     def atr(self, role: str) -> pd.Series:
         """`role`'s ATR, on `role`'s own frame."""
         return self.frame(role)[ATR]

@@ -434,14 +434,3 @@ def test_momentum_can_fire_again_after_price_returns():
 def test_momentum_first_bar_is_never_an_event():
     """No prior bar means no transition to observe -- same rule as breakouts()."""
     assert _mom([CROSS]).empty
-
-
-# --------------------------------------------------------------------------
-# combined level-free frame
-# --------------------------------------------------------------------------
-
-def test_candle_triggers_returns_all_three_pattern_columns():
-    df = mk([(100.0, 101.2, 97.0, 101.0)] * 8)
-    out = triggers.candle_triggers(df, feats_of(df), flat_atr(df), P)
-    assert list(out.columns) == ["rejection", "engulfing", "three_tail"]
-    assert len(out) == len(df)
