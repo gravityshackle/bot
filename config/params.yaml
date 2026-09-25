@@ -175,6 +175,11 @@ three_tail:
   min_tails_required: 3           # true to the name; 2 is the relaxed variant
   requires_nearby_level: false    # a cluster in open space is weaker evidence
                                   # and scores lower, but is not excluded
+  # Scoring gate 3 exemption. Tail bars are quiet by construction: completing-
+  # bar volume ratio median 0.53 vs 0.84 for all 10min bars, and requiring
+  # expansion removed 94% of S19 with no measured benefit. Volume still counts
+  # through Stage 2's confirmation_strength.
+  requires_volume_expansion: false
 
 # --- S20 engulfing ---------------------------------------------------------
 # Defined in spec S20. Body-to-body, NOT wick-to-wick: the current body must

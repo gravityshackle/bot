@@ -431,9 +431,18 @@ def gate_confirmation(c: Candidate, ctx: GateContext) -> GateResult:
     not the entry bar it landed on. CLV never substitutes, not even for a
     rejection candle that already passed its own CLV test.
 
+    Three-tail is exempt while `three_tail.requires_volume_expansion` is
+    false (scoring gate 3), as it is from gate 2: its tail bars are quiet by
+    construction, and requiring expansion removed 94% of S19 with no
+    measured benefit.
+
     `VOLUME_EXPANDED` is False when there is no baseline yet, so the baseline
     is read directly: no baseline is `unknown`, not a failure of volume.
     """
+    if c.kind == "three_tail" and not bool(
+            ctx.params.get("three_tail.requires_volume_expansion")):
+        return GateResult(3, PASS, "exempt: three-tail tail bars are quiet "
+                                   "by construction")
     frame = ctx.tfs.frame(c.role)
     if VOLUME_EXPANDED not in frame.columns:
         return GateResult(3, UNKNOWN, f"{c.role} frame carries no volume "

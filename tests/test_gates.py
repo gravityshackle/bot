@@ -279,16 +279,39 @@ def test_no_volume_baseline_is_unknown_not_a_failure_of_volume():
     assert gates.gate_confirmation(cand(), ctx(entry)).status == UNKNOWN
 
 
-def test_three_tail_volume_is_read_on_its_own_10min_bar():
+def _s19():
+    return cand("three_tail", role="three_tail", idx=9, decision_idx=20,
+                bars_=(7, 8, 9), level=100.0)
+
+
+def test_three_tail_is_exempt_from_gate_3_by_default():
+    """Tail bars are small-bodied and quiet by construction (completing-bar
+    volume ratio median 0.53 vs 0.84 for all 10min bars). Requiring expansion
+    removed 94% of S19 with no measured benefit, so it is exempt, as it is
+    from gate 2. Stage 2's confirmation_strength still scores its volume."""
+    tt = bars([FLAT] * 20, freq="10min")
+    tt.loc[9, VOLUME_EXPANDED] = False
+    r = gates.gate_confirmation(_s19(), ctx(tt=tt))
+    assert r.status == PASS and "exempt" in r.detail
+
+
+def test_exempting_three_tail_does_not_exempt_anything_else():
+    entry = bars(rows_with({20: REJ}))
+    entry.loc[20, VOLUME_EXPANDED] = False
+    for kind in sorted(gates.TRIGGER_KINDS - {"three_tail"}):
+        c = cand(kind, level=100.0, bars_=(18, 19, 20))
+        assert gates.gate_confirmation(c, ctx(entry)).status == FAIL, kind
+
+
+def test_three_tail_volume_is_read_on_its_own_10min_bar_when_required():
+    strict = params(three_tail__requires_volume_expansion=True)
     entry = bars([FLAT] * N)
     tt = bars([FLAT] * 20, freq="10min")
     tt.loc[9, VOLUME_EXPANDED] = False           # the cluster's own bar
-    c = cand("three_tail", role="three_tail", idx=9, decision_idx=20,
-             bars_=(7, 8, 9), level=100.0)
-    assert gates.gate_confirmation(c, ctx(entry, tt=tt)).status == FAIL
+    assert gates.gate_confirmation(_s19(), ctx(entry, tt=tt, p=strict)).status == FAIL
     tt.loc[9, VOLUME_EXPANDED] = True
     entry.loc[20, VOLUME_EXPANDED] = False       # entry bar is irrelevant
-    assert gates.gate_confirmation(c, ctx(entry, tt=tt)).status == PASS
+    assert gates.gate_confirmation(_s19(), ctx(entry, tt=tt, p=strict)).status == PASS
 
 
 # --------------------------------------------------------------------------
