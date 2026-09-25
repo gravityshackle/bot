@@ -127,6 +127,19 @@ def test_momentum_fires_on_the_first_cross_of_a_minor_swing_only():
     assert [m.idx for m in mo] == [15]
 
 
+def test_a_sub_buffer_cross_of_a_minor_swing_is_its_only_momentum_event():
+    """Regression. Bar 13 is a strong close at 100.7: through the 100.4 minor
+    swing but inside S4's 0.5 buffer. When minor swings shared the major
+    buffer, that cross did not kill the level, so after a dip the strong
+    re-cross at bar 15 fired momentum a second time on the same level."""
+    sub_buffer = (100.2, 100.8, 100.1, 100.7)      # body ratio ~0.71
+    strong = (100.2, 101.5, 100.1, 101.4)
+    rows = rows_with({13: sub_buffer, 14: FLAT, 15: strong})
+    c = ctx(frame(rows), piv=pivots((100.4, "high", 10, False)))
+    mo = kinds(engine.level_dependent_candidates(c), "momentum")
+    assert [m.idx for m in mo] == [13]
+
+
 def test_an_unclassified_swing_is_neither_major_nor_minor():
     strong = (100.2, 101.5, 100.1, 101.4)
     c = ctx(frame(rows_with({15: strong})), piv=pivots((100.4, "high", 10, pd.NA)))

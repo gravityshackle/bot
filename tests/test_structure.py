@@ -234,12 +234,12 @@ def test_full_pipeline_produces_both_kinds_and_some_majors():
 # liveness: a major swing dies on the first close beyond it BY THE S4 BUFFER
 # --------------------------------------------------------------------------
 
-def _swings(prices_kinds_idx):
-    """(price, kind, idx) rows as confirmed major swings, confirmed at idx+2."""
+def _swings(prices_kinds_idx, major=True):
+    """(price, kind, idx) rows as confirmed swings, confirmed at idx+2."""
     return pd.DataFrame([{
         "idx": i, "ts": pd.NaT, "price": pr, "kind": k,
         "confirmed_idx": i + 2, "confirmed_ts": pd.NaT, "depth": 5.0,
-        "is_major": True, "prior_opposite_idx": -1}
+        "is_major": major, "prior_opposite_idx": -1}
         for pr, k, i in prices_kinds_idx])
 
 
@@ -251,10 +251,12 @@ def _buf(n, value=0.5):
     return pd.Series([value] * n, dtype="float64")
 
 
-def _deaths(swings, closes, buf=0.5):
+def _deaths(swings, closes, buf=0.5, major=True):
     c = _closes(closes)
     b = buf if isinstance(buf, pd.Series) else _buf(len(c), buf)
-    return structure.mark_swing_deaths(_swings(swings), c, b)
+    return structure.mark_swing_deaths(_swings(swings, major), c,
+                                       major_buffer=b,
+                                       minor_buffer=_buf(len(c), 0.0))
 
 
 def test_a_swing_high_dies_on_the_first_close_beyond_the_buffer():
@@ -289,7 +291,8 @@ def test_a_wick_through_does_not_kill_a_swing():
     df = frame([10, 11, 15, 12, 17, 12, 11])        # bar 4's HIGH clears 15.5
     df["close"] = [9, 10, 14, 11, 14.5, 11, 10]      # but it closes below
     piv = structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
-                                      df["close"], _buf(len(df)))
+                                      df["close"], major_buffer=_buf(len(df)),
+                                      minor_buffer=_buf(len(df), 0.0))
     assert pd.isna(piv["dead_idx"].iloc[0])
 
 
@@ -312,10 +315,35 @@ def test_liveness_ignores_closes_before_the_pivot():
     assert pd.isna(piv["dead_idx"].iloc[0])
 
 
-def test_mark_swing_deaths_requires_the_buffer_to_match_the_closes():
-    with pytest.raises(ValueError, match="buffer"):
+def test_a_minor_swing_dies_on_a_bare_close_inside_the_buffer():
+    """Spec S1: minor swings die on a bare close, because the only trigger
+    defined against them (S11 momentum) is a bare close. The same closes
+    leave a MAJOR swing alive until the buffer clears."""
+    closes = [10, 11, 14, 12, 15.3, 14, 15.6, 13]
+    assert _deaths([(15.0, "high", 2)], closes, major=False)["dead_idx"].iloc[0] == 4
+    assert _deaths([(15.0, "high", 2)], closes, major=True)["dead_idx"].iloc[0] == 6
+
+
+def test_an_unclassified_swing_gets_no_death():
+    """is_major NA is neither major nor minor, so it is a level under neither
+    rule and no threshold applies. It is excluded downstream either way."""
+    piv = _deaths([(15.0, "high", 2)], [10, 11, 14, 12, 16, 17], major=pd.NA)
+    assert pd.isna(piv["dead_idx"].iloc[0])
+
+
+def test_mark_swing_deaths_requires_both_buffers_by_name():
+    """Both thresholds are required, so neither can silently default."""
+    with pytest.raises(TypeError):
         structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
-                                    _closes([1, 2, 3]), _buf(2))
+                                    _closes([1, 2, 3]), _buf(3))
+
+
+def test_mark_swing_deaths_requires_the_buffers_to_match_the_closes():
+    for major, minor in ((_buf(2), _buf(3)), (_buf(3), _buf(2))):
+        with pytest.raises(ValueError, match="buffer"):
+            structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
+                                        _closes([1, 2, 3]),
+                                        major_buffer=major, minor_buffer=minor)
 
 
 def test_live_major_swings_refuses_unmarked_pivots():
@@ -328,5 +356,7 @@ def test_live_major_swings_refuses_unmarked_pivots():
 def test_mark_swing_deaths_on_no_swings():
     empty = _swings([]).reindex(columns=structure.PIVOT_COLUMNS
                                 + ["depth", "is_major", "prior_opposite_idx"])
-    out = structure.mark_swing_deaths(empty, _closes([1, 2, 3]), _buf(3))
+    out = structure.mark_swing_deaths(empty, _closes([1, 2, 3]),
+                                      major_buffer=_buf(3),
+                                      minor_buffer=_buf(3, 0.0))
     assert "dead_idx" in out.columns and out.empty

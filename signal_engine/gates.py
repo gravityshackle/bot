@@ -178,9 +178,14 @@ class GateContext:
         if not ltf.index.equals(ent.index):
             raise RuntimeError("levels.apply() changed the entry index")
         htf = tfs.frame("htf")
+        # Spec S1: each swing type dies on the break of the trigger defined
+        # against it. Majors carry S8/S9, so S4's buffer. Minors carry only
+        # S11 momentum, a bare close, so no buffer.
         piv = structure.mark_swing_deaths(
             structure.swings(ltf, p, htf=htf, htf_atr=tfs.atr("htf")),
-            ltf["close"], triggers.breakout_buffer(ltf[ATR], p))
+            ltf["close"],
+            major_buffer=triggers.breakout_buffer(ltf[ATR], p),
+            minor_buffer=pd.Series(0.0, index=ltf.index))
         bias = tfs.align("htf", triggers.trend_bias(htf, p), name="trend_bias")
         daily_atr = levels.daily_atr_by_date(tfs.frame("daily"),
                                              int(p.get("atr.period")))

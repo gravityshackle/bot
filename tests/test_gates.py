@@ -91,9 +91,10 @@ def ctx(entry=None, *, tt=None, piv=None, gaps=None, bias="bullish",
     tfs = TimeframeSet(symbol="MES", params=p, symbol_cfg={}, roles=roles,
                        frames=frames)
     b = pd.Series([bias] * len(entry), index=entry.index, dtype="object")
-    piv = structure.mark_swing_deaths(piv if piv is not None else pivots(),
-                                      entry["close"],
-                                      triggers.breakout_buffer(entry[ATR], p))
+    piv = structure.mark_swing_deaths(
+        piv if piv is not None else pivots(), entry["close"],
+        major_buffer=triggers.breakout_buffer(entry[ATR], p),
+        minor_buffer=pd.Series(0.0, index=entry.index))
     return GateContext(tfs=tfs, entry=entry, pivots=piv,
                        gaps=gaps if gaps is not None else NO_GAPS,
                        bias=b, veto=veto)

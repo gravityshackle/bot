@@ -191,34 +191,51 @@ def last_confirmed_swings(pivots: pd.DataFrame, as_of_idx: int,
 DEAD_IDX = "dead_idx"
 
 
-def mark_swing_deaths(pivots: pd.DataFrame, close: pd.Series,
-                      buffer: pd.Series) -> pd.DataFrame:
-    """Add `dead_idx`: the first bar after each pivot that breaks it (S4).
+def mark_swing_deaths(pivots: pd.DataFrame, close: pd.Series, *,
+                      major_buffer: pd.Series,
+                      minor_buffer: pd.Series) -> pd.DataFrame:
+    """Add `dead_idx`: the first bar after each pivot that breaks it.
 
-    Spec S1 liveness: a swing high is dead once a bar closes above
-    `high + buffer`, a swing low once one closes below `low - buffer`, where
-    `buffer` is S4's breakout buffer on that closing bar
-    (`triggers.breakout_buffer()`). One threshold means "the level broke" and
-    "the level died" cannot disagree. With a bare close, a close inside the
-    buffer killed the swing without being a breakout, and the real breakout
-    that followed was of a dead level: 19% of swing deaths, 14% of S8/S9 on
-    swing levels. Only closes are read, so a wick never kills a level. NA
-    means it had not died by the end of the data.
+    Spec S1 liveness. A swing high is dead once a bar closes above
+    `high + buffer`, a swing low once one closes below `low - buffer`, with
+    the buffer read on that closing bar. The threshold is whatever breaks the
+    level for the trigger defined against it, so it differs by swing type:
 
-    `close` and `buffer` are on the frame the pivots were found on,
-    positionally. `buffer` is required so no caller can fall back to the bare
-    close by omission.
+      major  S4's breakout buffer (`triggers.breakout_buffer()`), because
+             S8/S9 are built on a buffered breakout. With a bare close, a
+             close inside the buffer killed the swing without being a
+             breakout, and the real breakout that followed was of a dead
+             level (19% of deaths, 14% of S8/S9 on swing levels).
+      minor  zero, a bare close, because S11 momentum is a bare close. With
+             the major buffer, a sub-buffer cross did not kill the level, so
+             momentum re-fired on a later re-cross of the same swing.
+
+    Unclassified swings (`is_major` NA) are levels under neither rule, so no
+    death is computed for them (NA). They are excluded downstream anyway.
+    Only closes are read, so a wick never kills a level. Otherwise NA means
+    it had not died by the end of the data.
+
+    `close` and both buffers are on the pivots' own frame, positionally.
+    Both buffers are required keywords, so neither threshold can default.
     """
-    if len(buffer) != len(close):
-        raise ValueError(f"buffer has {len(buffer)} bars but close has "
-                         f"{len(close)}; both must be the pivots' own frame")
+    for name, buf in (("major_buffer", major_buffer),
+                      ("minor_buffer", minor_buffer)):
+        if len(buf) != len(close):
+            raise ValueError(f"{name} has {len(buf)} bars but close has "
+                             f"{len(close)}; all must be the pivots' own frame")
     out = pivots.copy()
     c = close.to_numpy(dtype="float64")
-    b = np.asarray(buffer, dtype="float64")
+    b_major = np.asarray(major_buffer, dtype="float64")
+    b_minor = np.asarray(minor_buffer, dtype="float64")
     dead = []
-    for idx, price, kind in zip(out["idx"], out["price"], out["kind"]):
+    for idx, price, kind, major in zip(out["idx"], out["price"], out["kind"],
+                                       out["is_major"]):
+        if pd.isna(major):
+            dead.append(pd.NA)
+            continue
         i0 = int(idx) + 1
-        after, buf = c[i0:], b[i0:]
+        after = c[i0:]
+        buf = (b_major if bool(major) else b_minor)[i0:]
         hit = np.flatnonzero(after > price + buf if kind == "high"
                              else after < price - buf)
         dead.append(int(idx) + 1 + int(hit[0]) if len(hit) else pd.NA)
