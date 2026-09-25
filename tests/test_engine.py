@@ -92,6 +92,19 @@ def test_a_breakout_of_a_level_not_yet_confirmed_is_not_enumerated():
     assert kinds(engine.level_dependent_candidates(c), "failed_breakout") == []
 
 
+def test_a_sub_buffer_close_does_not_cost_the_real_breakout():
+    """Regression, end to end. Bar 13 closes at 100.7: beyond the 100.4 swing
+    but inside S4's 0.5 buffer, so it is not a breakout. Under a bare-close
+    liveness rule it killed the swing, and the real breakout at bar 15 (and
+    the failed breakout it produced) was then of a dead level."""
+    rows = rows_with({13: (100.3, 100.8, 100.2, 100.7), 15: BREAK, 16: FAIL_BACK})
+    c = ctx(frame(rows), piv=pivots(SWING))
+    fb = kinds(engine.level_dependent_candidates(c), "failed_breakout")
+    assert [f.idx for f in fb] == [16]
+    log = engine.run(c)
+    assert (log.loc[log["kind"] == "failed_breakout", "g2_level"] == "pass").all()
+
+
 def test_a_pattern_starting_after_the_level_died_is_not_kept():
     """The scan window runs past the death bar so a pattern that began while
     the level was live can finish. A SECOND break-and-fail later in that same

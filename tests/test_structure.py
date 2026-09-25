@@ -231,7 +231,7 @@ def test_full_pipeline_produces_both_kinds_and_some_majors():
 
 
 # --------------------------------------------------------------------------
-# liveness: a major swing dies on the first CLOSE beyond it (spec S1)
+# liveness: a major swing dies on the first close beyond it BY THE S4 BUFFER
 # --------------------------------------------------------------------------
 
 def _swings(prices_kinds_idx):
@@ -247,46 +247,75 @@ def _closes(values):
     return pd.Series(values, dtype="float64")
 
 
-def test_a_swing_high_dies_on_the_first_close_above_it():
-    piv = structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
-                                      _closes([10, 11, 14, 12, 13, 15.5, 14, 13]))
+def _buf(n, value=0.5):
+    return pd.Series([value] * n, dtype="float64")
+
+
+def _deaths(swings, closes, buf=0.5):
+    c = _closes(closes)
+    b = buf if isinstance(buf, pd.Series) else _buf(len(c), buf)
+    return structure.mark_swing_deaths(_swings(swings), c, b)
+
+
+def test_a_swing_high_dies_on_the_first_close_beyond_the_buffer():
+    piv = _deaths([(15.0, "high", 2)], [10, 11, 14, 12, 13, 15.6, 14, 13])
     assert piv["dead_idx"].iloc[0] == 5
+
+
+def test_a_close_inside_the_buffer_does_not_kill_a_swing():
+    """Regression, measured on real data. A close beyond the level but inside
+    S4's buffer is not a breakout, yet under a bare-close rule it killed the
+    swing. The real breakout that followed was then of a dead level, and gate
+    2 failed it. That was 19% of swing deaths and 14% of S8/S9 on swing levels."""
+    piv = _deaths([(15.0, "high", 2)], [10, 11, 14, 12, 15.3, 14, 15.6, 13])
+    assert piv["dead_idx"].iloc[0] == 6        # not bar 4's 15.3
+
+
+def test_closing_exactly_at_the_buffer_edge_does_not_kill_it():
+    """Same strict inequality as S4: a breakout needs close > level + buffer."""
+    piv = _deaths([(15.0, "high", 2)], [10, 11, 14, 12, 15.5, 13])
+    assert pd.isna(piv["dead_idx"].iloc[0])
+
+
+def test_the_buffer_is_read_on_the_closing_bar():
+    """The buffer is ATR-scaled, so it moves bar to bar."""
+    buf = pd.Series([0.5, 0.5, 0.5, 0.5, 1.0, 0.2], dtype="float64")
+    piv = _deaths([(15.0, "high", 2)], [10, 11, 14, 12, 15.6, 15.3], buf)
+    assert piv["dead_idx"].iloc[0] == 5        # 15.6 < 16.0 at bar 4; 15.3 > 15.2
 
 
 def test_a_wick_through_does_not_kill_a_swing():
     """Same close-not-wick distinction as S4: only closes are read at all."""
-    df = frame([10, 11, 15, 12, 16, 12, 11])        # bar 4's HIGH exceeds 15
+    df = frame([10, 11, 15, 12, 17, 12, 11])        # bar 4's HIGH clears 15.5
     df["close"] = [9, 10, 14, 11, 14.5, 11, 10]      # but it closes below
-    piv = structure.mark_swing_deaths(_swings([(15.0, "high", 2)]), df["close"])
-    assert pd.isna(piv["dead_idx"].iloc[0])
-
-
-def test_closing_exactly_at_the_swing_does_not_kill_it():
     piv = structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
-                                      _closes([10, 11, 14, 12, 15.0, 13]))
+                                      df["close"], _buf(len(df)))
     assert pd.isna(piv["dead_idx"].iloc[0])
 
 
-def test_a_swing_low_dies_on_the_first_close_below_it():
-    piv = structure.mark_swing_deaths(_swings([(10.0, "low", 2)]),
-                                      _closes([12, 11, 10.5, 11, 9.5, 11]))
-    assert piv["dead_idx"].iloc[0] == 4
+def test_a_swing_low_dies_on_the_first_close_beyond_the_buffer():
+    piv = _deaths([(10.0, "low", 2)], [12, 11, 10.5, 11, 9.7, 9.4, 11])
+    assert piv["dead_idx"].iloc[0] == 5        # 9.7 is inside the buffer
 
 
 def test_live_swings_are_confirmed_and_not_yet_dead():
     """Live from confirmation until the bar that closes beyond, and dead ON
     that bar: it has closed, so the break is known at that bar's decision."""
-    piv = structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
-                                      _closes([10, 11, 14, 12, 13, 15.5, 14]))
+    piv = _deaths([(15.0, "high", 2)], [10, 11, 14, 12, 13, 15.6, 14])
     live = lambda i: len(structure.live_major_swings(piv, i))
     assert [live(i) for i in range(7)] == [0, 0, 0, 0, 1, 0, 0]
 
 
 def test_liveness_ignores_closes_before_the_pivot():
     """A close above 15 BEFORE the swing formed says nothing about it."""
-    piv = structure.mark_swing_deaths(_swings([(15.0, "high", 3)]),
-                                      _closes([16, 11, 12, 14, 12, 13, 14]))
+    piv = _deaths([(15.0, "high", 3)], [16, 11, 12, 14, 12, 13, 14])
     assert pd.isna(piv["dead_idx"].iloc[0])
+
+
+def test_mark_swing_deaths_requires_the_buffer_to_match_the_closes():
+    with pytest.raises(ValueError, match="buffer"):
+        structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
+                                    _closes([1, 2, 3]), _buf(2))
 
 
 def test_live_major_swings_refuses_unmarked_pivots():
@@ -299,5 +328,5 @@ def test_live_major_swings_refuses_unmarked_pivots():
 def test_mark_swing_deaths_on_no_swings():
     empty = _swings([]).reindex(columns=structure.PIVOT_COLUMNS
                                 + ["depth", "is_major", "prior_opposite_idx"])
-    out = structure.mark_swing_deaths(empty, _closes([1, 2, 3]))
+    out = structure.mark_swing_deaths(empty, _closes([1, 2, 3]), _buf(3))
     assert "dead_idx" in out.columns and out.empty

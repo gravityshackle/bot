@@ -180,7 +180,7 @@ class GateContext:
         htf = tfs.frame("htf")
         piv = structure.mark_swing_deaths(
             structure.swings(ltf, p, htf=htf, htf_atr=tfs.atr("htf")),
-            ltf["close"])
+            ltf["close"], triggers.breakout_buffer(ltf[ATR], p))
         bias = tfs.align("htf", triggers.trend_bias(htf, p), name="trend_bias")
         daily_atr = levels.daily_atr_by_date(tfs.frame("daily"),
                                              int(p.get("atr.period")))

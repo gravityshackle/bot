@@ -17,7 +17,7 @@ import math
 import pandas as pd
 import pytest
 
-from features import levels, structure
+from features import levels, structure, triggers
 from features.schema import (
     ATR,
     VOLUME_BASELINE,
@@ -92,7 +92,8 @@ def ctx(entry=None, *, tt=None, piv=None, gaps=None, bias="bullish",
                        frames=frames)
     b = pd.Series([bias] * len(entry), index=entry.index, dtype="object")
     piv = structure.mark_swing_deaths(piv if piv is not None else pivots(),
-                                      entry["close"])
+                                      entry["close"],
+                                      triggers.breakout_buffer(entry[ATR], p))
     return GateContext(tfs=tfs, entry=entry, pivots=piv,
                        gaps=gaps if gaps is not None else NO_GAPS,
                        bias=b, veto=veto)
@@ -233,11 +234,11 @@ def test_an_unconfirmed_major_swing_is_not_a_level_yet():
 
 
 def test_a_broken_major_swing_is_not_a_level():
-    """Spec S1: a swing high dies on the first close above it. The flat bars
-    close at 100.2, so a high at 100.0 is dead and one at 100.4 is not --
-    both sit inside the rejection bar's range."""
-    dead = ctx(piv=pivots((100.0, "high", 15, True)))
-    live = ctx(piv=pivots((100.4, "high", 15, True)))
+    """Spec S1: a swing high dies on the first close above it by the S4
+    buffer (0.5 here). The flat bars close at 100.2, so a high at 99.6 is
+    dead and one at 100.0 is not. Both sit inside the rejection bar's range."""
+    dead = ctx(piv=pivots((99.6, "high", 15, True)))
+    live = ctx(piv=pivots((100.0, "high", 15, True)))
     assert gates.gate_level(cand(), dead).status == FAIL
     assert gates.gate_level(cand(), live).status == PASS
 
@@ -378,7 +379,7 @@ def test_an_unconfirmed_major_level_is_not_a_target():
 def test_a_broken_major_swing_is_not_a_target():
     """The nearer high at 93 was closed above at bar 15, so the target is the
     next LIVE one at 98 -- not a level price has already traded through."""
-    rows = low_rows({15: (92.8, 93.8, 92.6, 93.5), 20: REJ})
+    rows = low_rows({15: (92.8, 93.9, 92.6, 93.7), 20: REJ})   # > 93 + 0.5
     c = ctx(bars(rows), piv=pivots((93.0, "high", 10, True),
                                     (98.0, "high", 11, True)))
     plan = gates.plan_trade(cand(), c)

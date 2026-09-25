@@ -191,22 +191,36 @@ def last_confirmed_swings(pivots: pd.DataFrame, as_of_idx: int,
 DEAD_IDX = "dead_idx"
 
 
-def mark_swing_deaths(pivots: pd.DataFrame, close: pd.Series) -> pd.DataFrame:
-    """Add `dead_idx`: the first bar after each pivot that CLOSES beyond it.
+def mark_swing_deaths(pivots: pd.DataFrame, close: pd.Series,
+                      buffer: pd.Series) -> pd.DataFrame:
+    """Add `dead_idx`: the first bar after each pivot that breaks it (S4).
 
-    Spec S1 liveness: a swing high is dead once any bar closes above it, a
-    swing low once any bar closes below it. Only closes are read, so a wick
-    through never kills a level (S4's close-not-wick rule). Closing exactly at
-    the swing does not either. NA means it had not died by the end of the data.
+    Spec S1 liveness: a swing high is dead once a bar closes above
+    `high + buffer`, a swing low once one closes below `low - buffer`, where
+    `buffer` is S4's breakout buffer on that closing bar
+    (`triggers.breakout_buffer()`). One threshold means "the level broke" and
+    "the level died" cannot disagree. With a bare close, a close inside the
+    buffer killed the swing without being a breakout, and the real breakout
+    that followed was of a dead level: 19% of swing deaths, 14% of S8/S9 on
+    swing levels. Only closes are read, so a wick never kills a level. NA
+    means it had not died by the end of the data.
 
-    `close` must be the frame the pivots were found on, positionally.
+    `close` and `buffer` are on the frame the pivots were found on,
+    positionally. `buffer` is required so no caller can fall back to the bare
+    close by omission.
     """
+    if len(buffer) != len(close):
+        raise ValueError(f"buffer has {len(buffer)} bars but close has "
+                         f"{len(close)}; both must be the pivots' own frame")
     out = pivots.copy()
     c = close.to_numpy(dtype="float64")
+    b = np.asarray(buffer, dtype="float64")
     dead = []
     for idx, price, kind in zip(out["idx"], out["price"], out["kind"]):
-        after = c[int(idx) + 1:]
-        hit = np.flatnonzero(after > price if kind == "high" else after < price)
+        i0 = int(idx) + 1
+        after, buf = c[i0:], b[i0:]
+        hit = np.flatnonzero(after > price + buf if kind == "high"
+                             else after < price - buf)
         dead.append(int(idx) + 1 + int(hit[0]) if len(hit) else pd.NA)
     out[DEAD_IDX] = pd.array(dead, dtype="Int64")
     return out
