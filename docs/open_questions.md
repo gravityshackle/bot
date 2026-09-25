@@ -514,7 +514,7 @@ more tunable to overfit, so none is added.
 
 ---
 
-## 15. OPEN: which confirmed major swings are live levels and targets?
+## 15. ~~Which confirmed major swings are live levels and targets?~~ — RESOLVED (spec §1 liveness)
 
 **Affects:** gate 2 (a major swing is a marked level) and gate 4 (the S15
 target is "the next major level in trade direction").
@@ -538,3 +538,9 @@ price has since closed above is no longer overhead resistance. It adds no
 tunable. A recency cap adds one (K) with no spec basis, and it performs worse
 on both gates. `scripts/plot_triggers.py` used a recency cap only for
 readable charts.
+
+**Resolved: unbroken only** (spec §1). A confirmed major swing is live until a
+bar closes beyond it. There is no recency window, and dead swings do not flip
+sides (a deliberate v1 simplification). Implemented as
+`structure.mark_swing_deaths()` / `live_major_swings()`, used by gate 2's
+marked levels and gate 4's target.

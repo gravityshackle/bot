@@ -17,7 +17,7 @@ import math
 import pandas as pd
 import pytest
 
-from features import levels
+from features import levels, structure
 from features.schema import (
     ATR,
     VOLUME_BASELINE,
@@ -91,8 +91,9 @@ def ctx(entry=None, *, tt=None, piv=None, gaps=None, bias="bullish",
     tfs = TimeframeSet(symbol="MES", params=p, symbol_cfg={}, roles=roles,
                        frames=frames)
     b = pd.Series([bias] * len(entry), index=entry.index, dtype="object")
-    return GateContext(tfs=tfs, entry=entry,
-                       pivots=piv if piv is not None else pivots(),
+    piv = structure.mark_swing_deaths(piv if piv is not None else pivots(),
+                                      entry["close"])
+    return GateContext(tfs=tfs, entry=entry, pivots=piv,
                        gaps=gaps if gaps is not None else NO_GAPS,
                        bias=b, veto=veto)
 
@@ -113,6 +114,16 @@ def cand(kind="rejection", direction="long", idx=20, *, role="entry",
 
 # a long rejection bar touching prior-day low 90: low 89.8, close 91
 REJ = (90.6, 91.2, 89.8, 91.0)
+# base bars for the gate 4 tests: closing at 91, below every swing-high
+# target used there, so those targets stay live (spec S1 liveness)
+LOW = (90.8, 91.3, 90.5, 91.0)
+
+
+def low_rows(overrides: dict[int, tuple]):
+    rows = [LOW] * N
+    for i, r in overrides.items():
+        rows[i] = r
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -185,15 +196,25 @@ def test_level_defined_trigger_is_checked_on_its_own_level():
 
 def test_an_unconfirmed_major_swing_is_not_a_level_yet():
     """Pivots are invisible until confirmed_idx. Using one early is lookahead."""
-    c_late = ctx(piv=pivots((100.0, "high", 25, True)))
-    c_known = ctx(piv=pivots((100.0, "high", 15, True)))
+    c_late = ctx(piv=pivots((100.0, "low", 25, True)))
+    c_known = ctx(piv=pivots((100.0, "low", 15, True)))
     assert gates.gate_level(cand(), c_late).status == FAIL
     assert gates.gate_level(cand(), c_known).status == PASS
 
 
+def test_a_broken_major_swing_is_not_a_level():
+    """Spec S1: a swing high dies on the first close above it. The flat bars
+    close at 100.2, so a high at 100.0 is dead and one at 100.4 is not --
+    both sit inside the rejection bar's range."""
+    dead = ctx(piv=pivots((100.0, "high", 15, True)))
+    live = ctx(piv=pivots((100.4, "high", 15, True)))
+    assert gates.gate_level(cand(), dead).status == FAIL
+    assert gates.gate_level(cand(), live).status == PASS
+
+
 def test_an_unclassified_swing_is_not_a_major_level():
     """is_major NA means unknown, not major."""
-    c = ctx(piv=pivots((100.0, "high", 15, pd.NA)))
+    c = ctx(piv=pivots((100.0, "low", 15, pd.NA)))
     assert gates.gate_level(cand(), c).status == FAIL
 
 
@@ -277,32 +298,48 @@ def test_no_major_level_falls_back_to_exactly_2r_and_passes():
 
 def test_a_farther_major_level_is_the_target_and_rr_runs_above_2():
     """2R is a floor, not a cap: this is what keeps reward_risk_quality alive."""
-    c = ctx(bars(rows_with({20: REJ})), piv=pivots((98.0, "high", 10, True)))
+    c = ctx(bars(low_rows({20: REJ})), piv=pivots((98.0, "high", 10, True)))
     r, plan = gates.gate_reward_risk(cand(), c)
     assert plan.target_source == "major_level" and plan.target == 98.0
     assert plan.rr == pytest.approx(3.5) and r.status == PASS
 
 
 def test_a_major_level_inside_2r_fails_the_gate():
-    c = ctx(bars(rows_with({20: REJ})), piv=pivots((93.0, "high", 10, True)))
+    c = ctx(bars(low_rows({20: REJ})), piv=pivots((93.0, "high", 10, True)))
     r, plan = gates.gate_reward_risk(cand(), c)
     assert plan.rr == pytest.approx(1.0) and r.status == FAIL
 
 
 def test_the_nearest_major_level_beyond_entry_is_used():
-    c = ctx(bars(rows_with({20: REJ})),
-            piv=pivots((99.0, "high", 10, True), (96.0, "low", 12, True),
+    c = ctx(bars(low_rows({20: REJ})),
+            piv=pivots((99.0, "high", 10, True), (96.0, "high", 12, True),
                        (88.0, "low", 11, True)))           # below entry: ignored
     assert gates.plan_trade(cand(), c).target == 96.0
 
 
 def test_an_unconfirmed_major_level_is_not_a_target():
-    c = ctx(bars(rows_with({20: REJ})), piv=pivots((93.0, "high", 21, True)))
+    c = ctx(bars(low_rows({20: REJ})), piv=pivots((93.0, "high", 21, True)))
     assert gates.plan_trade(cand(), c).target_source == "2R_fallback"
 
 
+def test_a_broken_major_swing_is_not_a_target():
+    """The nearer high at 93 was closed above at bar 15, so the target is the
+    next LIVE one at 98 -- not a level price has already traded through."""
+    rows = low_rows({15: (92.8, 93.8, 92.6, 93.5), 20: REJ})
+    c = ctx(bars(rows), piv=pivots((93.0, "high", 10, True),
+                                    (98.0, "high", 11, True)))
+    plan = gates.plan_trade(cand(), c)
+    assert plan.target == 98.0 and plan.rr == pytest.approx(3.5)
+
+
+def test_a_wick_through_does_not_kill_a_target():
+    rows = low_rows({15: (92.8, 93.6, 92.6, 92.9), 20: REJ})   # high > 93
+    c = ctx(bars(rows), piv=pivots((93.0, "high", 10, True)))
+    assert gates.plan_trade(cand(), c).target == 93.0
+
+
 def test_disagreement_is_flagged_but_never_moves_the_target():
-    c = ctx(bars(rows_with({20: REJ})), piv=pivots((99.0, "high", 10, True)))
+    c = ctx(bars(low_rows({20: REJ})), piv=pivots((99.0, "high", 10, True)))
     r, plan = gates.gate_reward_risk(cand(), c)
     assert plan.target == 99.0 and plan.disagreement_flag      # 8 vs 4 = 2.0x
     assert r.status == PASS and "flag" in r.detail

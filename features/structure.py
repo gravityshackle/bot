@@ -186,3 +186,45 @@ def last_confirmed_swings(pivots: pd.DataFrame, as_of_idx: int,
         # admitting unclassified swings as targets.
         out = out[out["is_major"].fillna(False).astype(bool)]
     return out
+
+
+DEAD_IDX = "dead_idx"
+
+
+def mark_swing_deaths(pivots: pd.DataFrame, close: pd.Series) -> pd.DataFrame:
+    """Add `dead_idx`: the first bar after each pivot that CLOSES beyond it.
+
+    Spec S1 liveness: a swing high is dead once any bar closes above it, a
+    swing low once any bar closes below it. Only closes are read, so a wick
+    through never kills a level (S4's close-not-wick rule). Closing exactly at
+    the swing does not either. NA means it had not died by the end of the data.
+
+    `close` must be the frame the pivots were found on, positionally.
+    """
+    out = pivots.copy()
+    c = close.to_numpy(dtype="float64")
+    dead = []
+    for idx, price, kind in zip(out["idx"], out["price"], out["kind"]):
+        after = c[int(idx) + 1:]
+        hit = np.flatnonzero(after > price if kind == "high" else after < price)
+        dead.append(int(idx) + 1 + int(hit[0]) if len(hit) else pd.NA)
+    out[DEAD_IDX] = pd.array(dead, dtype="Int64")
+    return out
+
+
+def live_major_swings(pivots: pd.DataFrame, as_of_idx: int,
+                      kind: str | None = None) -> pd.DataFrame:
+    """Major swings that are live levels at bar `as_of_idx` (spec S1).
+
+    Confirmed by `as_of_idx`, classified major, and not yet closed beyond. A
+    swing is dead ON the bar that closes beyond it: that bar has closed, so
+    the break is known when that bar is decided. There is no recency window.
+    A dead swing does not come back as the opposite side's level, which is a
+    deliberate v1 simplification.
+    """
+    if DEAD_IDX not in pivots.columns:
+        raise ValueError("pivots carry no dead_idx; run mark_swing_deaths() "
+                         "first, or 'live' silently means every swing ever")
+    out = last_confirmed_swings(pivots, as_of_idx, kind=kind, major_only=True)
+    dead = out[DEAD_IDX]
+    return out[(dead.isna() | (dead > as_of_idx)).to_numpy(dtype=bool)]

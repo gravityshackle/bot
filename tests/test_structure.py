@@ -228,3 +228,76 @@ def test_full_pipeline_produces_both_kinds_and_some_majors():
     assert set(sw["kind"]) == {"high", "low"}
     assert sw["is_major"].notna().any()
     assert (sw["confirmed_idx"] > sw["idx"]).all()
+
+
+# --------------------------------------------------------------------------
+# liveness: a major swing dies on the first CLOSE beyond it (spec S1)
+# --------------------------------------------------------------------------
+
+def _swings(prices_kinds_idx):
+    """(price, kind, idx) rows as confirmed major swings, confirmed at idx+2."""
+    return pd.DataFrame([{
+        "idx": i, "ts": pd.NaT, "price": pr, "kind": k,
+        "confirmed_idx": i + 2, "confirmed_ts": pd.NaT, "depth": 5.0,
+        "is_major": True, "prior_opposite_idx": -1}
+        for pr, k, i in prices_kinds_idx])
+
+
+def _closes(values):
+    return pd.Series(values, dtype="float64")
+
+
+def test_a_swing_high_dies_on_the_first_close_above_it():
+    piv = structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
+                                      _closes([10, 11, 14, 12, 13, 15.5, 14, 13]))
+    assert piv["dead_idx"].iloc[0] == 5
+
+
+def test_a_wick_through_does_not_kill_a_swing():
+    """Same close-not-wick distinction as S4: only closes are read at all."""
+    df = frame([10, 11, 15, 12, 16, 12, 11])        # bar 4's HIGH exceeds 15
+    df["close"] = [9, 10, 14, 11, 14.5, 11, 10]      # but it closes below
+    piv = structure.mark_swing_deaths(_swings([(15.0, "high", 2)]), df["close"])
+    assert pd.isna(piv["dead_idx"].iloc[0])
+
+
+def test_closing_exactly_at_the_swing_does_not_kill_it():
+    piv = structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
+                                      _closes([10, 11, 14, 12, 15.0, 13]))
+    assert pd.isna(piv["dead_idx"].iloc[0])
+
+
+def test_a_swing_low_dies_on_the_first_close_below_it():
+    piv = structure.mark_swing_deaths(_swings([(10.0, "low", 2)]),
+                                      _closes([12, 11, 10.5, 11, 9.5, 11]))
+    assert piv["dead_idx"].iloc[0] == 4
+
+
+def test_live_swings_are_confirmed_and_not_yet_dead():
+    """Live from confirmation until the bar that closes beyond, and dead ON
+    that bar: it has closed, so the break is known at that bar's decision."""
+    piv = structure.mark_swing_deaths(_swings([(15.0, "high", 2)]),
+                                      _closes([10, 11, 14, 12, 13, 15.5, 14]))
+    live = lambda i: len(structure.live_major_swings(piv, i))
+    assert [live(i) for i in range(7)] == [0, 0, 0, 0, 1, 0, 0]
+
+
+def test_liveness_ignores_closes_before_the_pivot():
+    """A close above 15 BEFORE the swing formed says nothing about it."""
+    piv = structure.mark_swing_deaths(_swings([(15.0, "high", 3)]),
+                                      _closes([16, 11, 12, 14, 12, 13, 14]))
+    assert pd.isna(piv["dead_idx"].iloc[0])
+
+
+def test_live_major_swings_refuses_unmarked_pivots():
+    """Without deaths marked, 'live' would silently mean 'every swing ever'
+    -- the ~470-levels-per-bar failure this rule exists to prevent."""
+    with pytest.raises(ValueError, match="mark_swing_deaths"):
+        structure.live_major_swings(_swings([(15.0, "high", 2)]), 10)
+
+
+def test_mark_swing_deaths_on_no_swings():
+    empty = _swings([]).reindex(columns=structure.PIVOT_COLUMNS
+                                + ["depth", "is_major", "prior_opposite_idx"])
+    out = structure.mark_swing_deaths(empty, _closes([1, 2, 3]))
+    assert "dead_idx" in out.columns and out.empty

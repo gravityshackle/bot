@@ -156,7 +156,7 @@ class GateContext:
     """Everything the gates read for one symbol, built once."""
     tfs: TimeframeSet
     entry: pd.DataFrame        # entry frame with S2/S5 columns attached
-    pivots: pd.DataFrame       # S1 swings on the entry frame
+    pivots: pd.DataFrame       # S1 swings on the entry frame, deaths marked
     gaps: pd.DataFrame         # S3 zones, with `active_from` (first knowable ts)
     bias: pd.Series            # S14 bias aligned onto the entry frame
     veto: Veto | None = None
@@ -178,7 +178,9 @@ class GateContext:
         if not ltf.index.equals(ent.index):
             raise RuntimeError("levels.apply() changed the entry index")
         htf = tfs.frame("htf")
-        piv = structure.swings(ltf, p, htf=htf, htf_atr=tfs.atr("htf"))
+        piv = structure.mark_swing_deaths(
+            structure.swings(ltf, p, htf=htf, htf_atr=tfs.atr("htf")),
+            ltf["close"])
         bias = tfs.align("htf", triggers.trend_bias(htf, p), name="trend_bias")
         daily_atr = levels.daily_atr_by_date(tfs.frame("daily"),
                                              int(p.get("atr.period")))
@@ -312,9 +314,10 @@ def marked_levels(ctx: GateContext, i: int) -> list[tuple[str, float]]:
     prior periods. S5 range edges are the current compression window, which
     ends at bar i. S3 gap edges count from the gap's first in-scope bar until
     the session it fills (inclusive: the fill date is only known to the
-    session, not the bar). Major swings (S1) go through
-    `last_confirmed_swings()`, so an unconfirmed pivot is invisible, and an
-    unclassified one (`is_major` NA) is not treated as major.
+    session, not the bar). Major swings (S1) count only while LIVE
+    (`structure.live_major_swings()`): confirmed, classified major, and not
+    yet closed beyond. Counting every swing in the history left ~470 levels
+    live at a typical bar, which made gate 2 pass almost anything.
     """
     row = ctx.entry.iloc[i]
     out: list[tuple[str, float]] = []
@@ -337,7 +340,7 @@ def marked_levels(ctx: GateContext, i: int) -> list[tuple[str, float]]:
             out += [("gap edge", float(z.zone_low)),
                     ("gap edge", float(z.zone_high))]
 
-    sw = structure.last_confirmed_swings(ctx.pivots, i, major_only=True)
+    sw = structure.live_major_swings(ctx.pivots, i)
     for kind, price in zip(sw["kind"], sw["price"]):
         out.append((f"major swing {kind}", float(price)))
     return out
@@ -468,8 +471,10 @@ def plan_trade(c: Candidate, ctx: GateContext) -> TradePlan | None:
         return TradePlan(entry, stop, math.nan, risk, math.nan, invalid,
                          "none")
 
-    sw = structure.last_confirmed_swings(ctx.pivots, c.decision_idx,
-                                         major_only=True)
+    # Only LIVE major swings (spec S1). A level price has already closed
+    # through is not a target. It also means a live high is always above the
+    # last close and a live low below it, so no swing low is ever "overhead".
+    sw = structure.live_major_swings(ctx.pivots, c.decision_idx)
     beyond = sw[sw["price"] > entry] if long_ else sw[sw["price"] < entry]
     if beyond.empty:
         target = entry + min_rr * risk if long_ else entry - min_rr * risk
@@ -491,8 +496,8 @@ def gate_reward_risk(c: Candidate, ctx: GateContext
                      ) -> tuple[GateResult, TradePlan | None]:
     """4. RR >= min_reward_risk (S16), on the Part 0 stop and S15 target.
 
-    The target is the next confirmed major level beyond entry. 2R is the
-    floor and the fallback when none exists, never a cap. A stop that does
+    The target is the next LIVE major level beyond entry (spec S1). 2R is
+    the floor and the fallback when none exists, never a cap. A stop that does
     not sit beyond entry means there is no risk to measure. That is a
     failure, not a zero-risk trade.
     """
