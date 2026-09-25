@@ -77,7 +77,7 @@ that has to match. Major swings keep §4's buffer, since §8/§9's break is
 buffered. One shared function, two thresholds, each matching the trigger
 definition it actually serves — not one threshold assumed to serve both.
 
-A broken swing high is simply dropped, not treated
+ A broken swing high is simply dropped, not treated
 as new support, even though "broken resistance becomes support" is a
 commonly-cited discretionary concept. This is a deliberate simplification for
 v1, not an oversight — role-reversal adds real complexity (whether a flipped
@@ -236,6 +236,24 @@ other selective trigger types — an order of magnitude difference that is
 itself the symptom, not a sign the trigger is simply more common.) Fire only
 on the bar where the condition first becomes true after not having been true;
 do not re-fire while it remains true.
+
+**The cross direction must match the level's canonical side** — a swing
+high only counts an *upward* close through it (long momentum), a swing low
+only a *downward* close through it (short momentum). This is the same
+directional-match principle §10 already applies to range reclaim: a level
+type has one coherent "continuation" direction, and a cross in the other
+direction isn't weaker evidence of that direction, it's evidence of nothing
+this trigger is meant to detect. **Found necessary, not hypothetical**: when
+a bar closes exactly at a swing high's own extreme, the next bar closing
+below it registers as a "cross" under a direction-blind check — spawning a
+short momentum signal off a swing *high*, which corresponds to no coherent
+trading rationale. Because a downward close can never kill a swing high
+under §1's liveness rule, the level stays live and the genuine later upward
+break still fires too, so this doesn't suppress the real signal — it adds a
+spurious extra one. Confirmed rare in practice (4 of 3,249 momentum events,
+~0.1%) but rare isn't the same as harmless: the fix is cheap, well-precedented
+by §10, and removes a signal with no coherent direction rather than tuning
+around one.
 
 ## 12. Volume Expansion (Confirmation)
 
