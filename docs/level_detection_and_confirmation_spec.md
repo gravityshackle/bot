@@ -250,9 +250,14 @@ short momentum signal off a swing *high*, which corresponds to no coherent
 trading rationale. Because a downward close can never kill a swing high
 under §1's liveness rule, the level stays live and the genuine later upward
 break still fires too, so this doesn't suppress the real signal — it adds a
-spurious extra one. Confirmed rare in practice (4 of 3,249 momentum events,
-~0.1%) but rare isn't the same as harmless: the fix is cheap, well-precedented
-by §10, and removes a signal with no coherent direction rather than tuning
+spurious extra one. Measured after the fix against the prior code: **33 of
+3,249 momentum events (~1%) were wrong-side**, every one a cross with no live
+swing of the matching side at its anchor bar, and nothing was added. The
+figure first reported, 4, counted only the cases where a wrong-side event
+shared a swing's live interval with that swing's real break; the other 29
+were the only event on their interval, so a per-interval check could not see
+them. Rare isn't the same as harmless: the fix is cheap, well-precedented by
+§10, and removes a signal with no coherent direction rather than tuning
 around one.
 
 ## 12. Volume Expansion (Confirmation)
