@@ -333,16 +333,23 @@ principle as nullable `is_major` in §1 — a genuinely ambiguous state gets
 excluded explicitly, never forced into a default bucket. `gates.py` must
 handle a "both" label as a distinct, non-directional case.
 
-**Zero-range bars (`open == high == low == close`) must not qualify as a
-tail of either side.** The wick-to-body ratio check (`upper_wick >=
-wick_body_ratio × body`) trivially passes when both sides are zero
-(`0 >= 2.0 × 0`), so a bar with no real trading activity within it can
-currently register as a "tail" — and on thin instruments this is the
-dominant driver of spurious two-sided classifications, not genuine
-conflicting rejection evidence. This guard belongs in the shared candle-
-anatomy logic, not patched into §19 alone — §7 (rejection) and §20
-(engulfing) both reuse the same wick/body math and are equally exposed to
-this degenerate input, even though it was found via three-tail specifically.
+**The degenerate-wick guard, corrected against the actual implementation
+(`confirmation.wick_dominates()`).** This is broader than pure zero-range
+bars — it also covers a doji's *bare side*: a bar with a real range but a
+zero (or near-zero) body still trivially passes the wick-to-body ratio check
+on whichever side has any wick at all, since almost anything is `>= 2.0 ×
+~0`. The guard requires the wick itself to have real length, not just a
+favorable ratio to a near-zero body — and this affects every instrument, not
+only thin ones. Confirmed on real data: MET's S19 event count dropped from
+306 to 36 bars (10-minute frame) and its two-sided count from 151 to 0 once
+the guard was in place. **Correction to the original claim in this doc**: §7
+(rejection) and §20 (engulfing) were not actually exposed to this at current
+parameter settings — their counts were unchanged when the guard was added,
+and both are now pinned by regression tests confirming that. The guard
+still correctly lives in the shared candle-anatomy code (not duplicated per
+trigger type), since it protects against a class of degenerate input that
+could affect any wick-ratio-based check under different settings later — it
+just happens that only S19 was actually hit by it as currently configured.
 
 ## 20. Bullish / Bearish Engulfing (Trigger)
 
