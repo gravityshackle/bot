@@ -511,3 +511,30 @@ to ATR, so they are genuine. Only 0.15 × ATR clears most of them, and it costs
 5-11% of S19 bars and already excluded from trading as no-trade under §19. A
 floor would buy selectivity at the cost of clean events, and it would be one
 more tunable to overfit, so none is added.
+
+---
+
+## 15. OPEN: which confirmed major swings are live levels and targets?
+
+**Affects:** gate 2 (a major swing is a marked level) and gate 4 (the S15
+target is "the next major level in trade direction").
+
+No spec section says when a confirmed major swing stops being a level.
+`signal_engine/gates.py` currently counts every confirmed major swing in the
+history, and at a typical trigger bar that is about 470 of them. At that
+density almost any price is inside some old swing's test zone, and the "next
+major level" is almost always a few ticks past entry. Real S7/S20 triggers,
+MES / MNQ / MCL / MGC:
+
+| Which major swings count | Gate 2 pass | Gate 4 pass | Median RR |
+|---|---|---|---|
+| all confirmed (current) | 90-95% | 3-8% | 0.10-0.18 |
+| last 3 per side | 64-69% | 27-33% | 0.93-1.10 |
+| last 5 per side | 70-74% | 19-27% | 0.74-0.82 |
+| unbroken only | 30-42% | 61-63% | 2.41-2.84 |
+
+"Unbroken" means no close beyond the swing since it confirmed: a swing high
+price has since closed above is no longer overhead resistance. It adds no
+tunable. A recency cap adds one (K) with no spec basis, and it performs worse
+on both gates. `scripts/plot_triggers.py` used a recency cap only for
+readable charts.

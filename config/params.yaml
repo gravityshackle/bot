@@ -121,11 +121,11 @@ clv:
 trend:
   ema_period: 20                  # one EMA only; spec allows 20 or 50
   slope_lookback_bars: 5          # sensitivity: LOW
-  # Spec S14 says a neutral/chop HTF is a deliberate no-trade filter, but the
-  # scoring spec assigns neutral-HTF reversals a 0.5 directional score, which
-  # presupposes they reach scoring. CONTRADICTION -- see
-  # docs/open_questions.md. Not needed until Phase 3.
-  neutral_policy: UNRESOLVED
+  # RESOLVED (spec S14, scoring gate 5): neutral or opposite HTF bias is a
+  # hard gate for CONTINUATION triggers only. Reversals are never HTF-gated;
+  # scoring's Directional Context grades them instead.
+  # See docs/open_questions.md #4.
+  neutral_policy: continuation_only
 
 # --- S15 ATR & risk state --------------------------------------------------
 atr:
@@ -134,12 +134,20 @@ atr:
   high_vol_ratio: 1.3             # ATR(14) > 1.3 x mean -> high vol
   low_vol_ratio: 0.7              # ATR(14) < 0.7 x mean -> low vol
 stops:
+  # Stop = the pattern's own extreme (exit spec Part 0) -/+ this x ATR(entry).
   buffer_atr_multiple: 0.20       # spec range 0.10-0.25
+entry:
+  # Exit spec Part 2: breakout/retest and S17 enter "at the level being
+  # retested, +/- 1 tick in your favor". Read as a BETTER price: a long bids
+  # this many ticks below the level, a short offers above it.
+  level_offset_ticks: 1
 targets:
   min_reward_risk: 2.0            # sensitivity: HIGH -- frequency vs quality
   rr_cap: 4.0                     # scoring S5 caps RR benefit here
-  # Spec S15: target = nearer of (next major level, 2R), and flag when the two
-  # disagree "by a lot" -- no threshold given. This is that threshold.
+  # Spec S15 (corrected): target = the next major level in trade direction,
+  # with 2R as the floor and the fallback when none has confirmed. When the
+  # major level and 2R disagree by more than this ratio it is LOGGED as a
+  # diagnostic; the target itself never changes.
   disagreement_flag_ratio: 1.5
 
 # --- S17 confirmation signal (Soloway two-stage) ---------------------------

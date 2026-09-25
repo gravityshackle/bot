@@ -213,7 +213,6 @@ def test_index_symbols_keep_session_matched():
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("path", [
-    "trend.neutral_policy",   # S14 vs scoring S4 contradiction, Phase 3
     "channels.status",        # never defined in any spec; deferred by agreement
 ])
 def test_unresolved_parameters_raise_rather_than_defaulting(path):
@@ -224,9 +223,10 @@ def test_unresolved_parameters_raise_rather_than_defaulting(path):
 @pytest.mark.parametrize("path,expected", [
     ("swings.major_depth_reference", "prior_opposite_swing"),  # spec S1
     ("engulfing.strength_multiplier", 1.3),                    # spec S20
+    ("trend.neutral_policy", "continuation_only"),             # S14, gate 5
 ])
 def test_resolved_spec_questions_no_longer_block(path, expected):
-    """Both were sentinels until the spec was amended; they must now load."""
+    """All were sentinels until the spec was amended; they must now load."""
     assert load_params("MES").get(path) == expected
 
 
