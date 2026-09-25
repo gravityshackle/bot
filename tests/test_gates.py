@@ -194,6 +194,36 @@ def test_level_defined_trigger_is_checked_on_its_own_level():
     assert gates.gate_level(off, ctx()).status == FAIL
 
 
+def test_a_breakout_trigger_is_judged_on_its_level_before_the_break():
+    """S8/S9/S17 are built on a close THROUGH their level, and under spec S1
+    that close kills a swing. Judged at the decision bar, every breakout-family
+    trigger on a swing level would fail gate 2. The level is checked on the bar
+    before the pattern starts, while it was still a live marked level."""
+    rows = rows_with({15: (100.3, 101.2, 100.2, 101.0),        # closes > 100.4
+                      20: (100.6, 100.9, 100.3, 100.8)})
+    c = ctx(bars(rows), piv=pivots((100.4, "high", 10, True)))
+    retest = cand("breakout_retest", level=100.4, bars_=tuple(range(15, 21)))
+    assert gates.gate_level(retest, c).status == PASS
+    assert "major swing high" in gates.gate_level(retest, c).detail
+
+
+def test_a_level_marked_only_after_the_pattern_began_does_not_count():
+    rows = rows_with({15: (100.3, 101.2, 100.2, 101.0)})
+    c = ctx(bars(rows), piv=pivots((100.4, "high", 17, True)))   # confirms later
+    retest = cand("breakout_retest", level=100.4, bars_=tuple(range(15, 21)))
+    assert gates.gate_level(retest, c).status == FAIL
+
+
+def test_a_range_reclaim_is_judged_on_the_range_before_the_escape():
+    """The rolling range high moves to include the escape bar itself, so at the
+    decision bar the edge being reclaimed is no longer the range's edge."""
+    entry = bars([FLAT] * N)
+    entry.loc[10:17, levels.RANGE_HIGH] = 100.5              # range until 17
+    entry.loc[18:, levels.RANGE_HIGH] = 101.5                # escape widened it
+    c = cand("range_reclaim", "short", idx=20, level=100.5, bars_=(18, 19, 20))
+    assert gates.gate_level(c, ctx(entry)).status == PASS
+
+
 def test_an_unconfirmed_major_swing_is_not_a_level_yet():
     """Pivots are invisible until confirmed_idx. Using one early is lookahead."""
     c_late = ctx(piv=pivots((100.0, "low", 25, True)))

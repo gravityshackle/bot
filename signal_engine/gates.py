@@ -381,6 +381,14 @@ def gate_level(c: Candidate, ctx: GateContext) -> GateResult:
     while `three_tail.requires_nearby_level` is false (scoring gate 2).
     Level-defined triggers are checked on their own level; the level-free
     patterns on whether any of their bars reached a marked level's zone.
+
+    **Level-defined triggers are judged on the bar BEFORE their pattern
+    starts.** S8, S9 and S17 are built on a close through their level, and
+    under spec S1 that close kills a swing. A range escape also drags the
+    rolling range edge with it. Judged at the decision bar, the level the
+    pattern is about would already be gone. The question gate 2 asks is
+    whether the pattern happened at a marked level, and that is decided at
+    the moment it began. A level that only became marked later does not count.
     """
     p = ctx.params
     if c.kind == "momentum":
@@ -388,11 +396,16 @@ def gate_level(c: Candidate, ctx: GateContext) -> GateResult:
     if c.kind == "three_tail" and not bool(p.get("three_tail.requires_nearby_level")):
         return GateResult(2, PASS, "exempt: three-tail may fire in open space")
 
-    atr = ctx.entry[ATR].iloc[c.decision_idx]
+    at = c.decision_idx
+    if c.kind in LEVEL_DEFINED:
+        at = c.pattern_bars[0] - 1
+        if at < 0:
+            return GateResult(2, UNKNOWN, "pattern starts on the first bar")
+    atr = ctx.entry[ATR].iloc[at]
     if pd.isna(atr):
         return GateResult(2, UNKNOWN, "ATR not seeded; no test-zone tolerance")
     tol = float(triggers.test_zone(pd.Series([atr]), p).iloc[0])
-    marks = marked_levels(ctx, c.decision_idx)
+    marks = marked_levels(ctx, at)
 
     if c.kind in LEVEL_DEFINED or c.kind == "three_tail":
         if pd.isna(c.level):
