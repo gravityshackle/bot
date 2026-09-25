@@ -411,8 +411,8 @@ def breakout_retests(bars: pd.DataFrame, level: float, atr: pd.Series,
 
 def momentum_continuation(bars: pd.DataFrame, feats: pd.DataFrame,
                           minor_level: float, params: Params,
-                          bias: pd.Series, volume_expanded: pd.Series
-                          ) -> pd.DataFrame:
+                          bias: pd.Series, volume_expanded: pd.Series,
+                          *, side: str) -> pd.DataFrame:
     """Requires ALL of S11: trend aligned, strong body, close beyond a minor
     level in the trend direction, and volume expansion.
 
@@ -432,7 +432,17 @@ def momentum_continuation(bars: pd.DataFrame, feats: pd.DataFrame,
     transition, exactly as S4 treats a level; the body, volume and trend
     filters are then applied to the transition bar. As with `breakouts()`, the
     first bar can never be an event: there is no prior bar to transition from.
+
+    **The cross must match the level's side** (spec S11), the same rule S10
+    applies to range edges. `side` is which kind of swing `minor_level` is:
+    a swing "high" counts only an upward close through it (long), a swing
+    "low" only a downward one (short). It is required, not inferred, because
+    a bare price does not say which it is. Direction-blind, a close exactly
+    at a swing high's extreme followed by a lower close read as a downward
+    cross, which produced a short off a swing high (4 of 3,249 real events).
     """
+    if side not in ("high", "low"):
+        raise ValueError(f"side must be 'high' or 'low', got {side!r}")
     min_ratio = float(params.get("momentum.min_body_ratio"))
     need_trend = bool(params.get("momentum.requires_trend_alignment"))
     need_vol = bool(params.get("momentum.requires_volume_expansion"))
@@ -451,6 +461,10 @@ def momentum_continuation(bars: pd.DataFrame, feats: pd.DataFrame,
 
     long_hit = (strong & vol_ok & up_cross & bull_ok).fillna(False)
     short_hit = (strong & vol_ok & down_cross & bear_ok).fillna(False)
+    if side == "high":
+        short_hit = short_hit & False
+    else:
+        long_hit = long_hit & False
 
     longs = long_hit.to_numpy(dtype=bool)
     hits = np.flatnonzero(longs | short_hit.to_numpy(dtype=bool))

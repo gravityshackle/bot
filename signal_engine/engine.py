@@ -22,8 +22,9 @@ whether a level was marked in time.
     prior day / week (S2) each run of bars carrying that value
     gap edge (S3)         first in-scope bar .. end of the session it fills
     range edge (S5)       each run of bars with that rolling edge (S10 only)
-    minor swing (S11)     like a major swing, so momentum fires on the FIRST
-                          close through it, never again on a later re-cross
+    minor swing (S11)     until a bare close through it, so momentum fires on
+                          the FIRST cross only; highs and lows are kept apart
+                          because S11's cross direction follows the side
 
 Levels on the same tick are merged, so one price held by a prior-day high and
 a swing high is scanned once and named for both.
@@ -79,13 +80,16 @@ def _runs(values: pd.Series) -> list[tuple[float, Interval]]:
     return out
 
 
-def _swing_intervals(pivots: pd.DataFrame, n: int, major: bool
+def _swing_intervals(pivots: pd.DataFrame, n: int, major: bool,
+                     kind: str | None = None
                      ) -> list[tuple[str, float, Interval]]:
     if pivots.empty:
         return []
     flag = pivots["is_major"]
     pick = (flag.fillna(False).astype(bool) if major
             else flag.notna() & ~flag.fillna(True).astype(bool))
+    if kind is not None:
+        pick = pick & (pivots["kind"] == kind)
     out = []
     for r in pivots[pick.to_numpy(dtype=bool)].itertuples():
         end = n - 1 if pd.isna(r.dead_idx) else int(r.dead_idx) - 1
@@ -168,9 +172,17 @@ def range_edge_intervals(ctx: GateContext) -> list[tuple[str, LiveLevel]]:
     return out
 
 
-def minor_level_intervals(ctx: GateContext) -> list[LiveLevel]:
-    return _merge(_swing_intervals(ctx.pivots, len(ctx.entry), major=False),
-                  tick_size(ctx.params))
+def minor_level_intervals(ctx: GateContext) -> list[tuple[str, LiveLevel]]:
+    """(side, level) for each minor swing price, merged within a side only.
+
+    S11's cross direction follows the swing's side, so a minor high and a
+    minor low on the same tick must stay two levels. Merged, they would be
+    one level with no single side to match.
+    """
+    n, tick = len(ctx.entry), tick_size(ctx.params)
+    return [(side, lv) for side in ("high", "low")
+            for lv in _merge(_swing_intervals(ctx.pivots, n, major=False,
+                                              kind=side), tick)]
 
 
 # ==========================================================================
@@ -243,13 +255,14 @@ def level_dependent_candidates(ctx: GateContext) -> list[Candidate]:
                 if _keep(c, a, b):
                     out.append(c)
 
-    for lv in minor_level_intervals(ctx):
+    for side, lv in minor_level_intervals(ctx):
         for a, b, _ in _windows(lv, n, 0):
             w = min(b + 1, n - 1)          # momentum is the crossing bar itself
             s, _atr = sub(a, w)
             bias = ctx.bias.iloc[a:w + 1].reset_index(drop=True)
             vol = s[VOLUME_EXPANDED]
-            for ev in triggers.momentum_continuation(s, s, lv.price, p, bias, vol).to_dict("records"):
+            for ev in triggers.momentum_continuation(
+                    s, s, lv.price, p, bias, vol, side=side).to_dict("records"):
                 c = gates.from_event(_shift_event(ev, a), level_name=lv.name)
                 if _keep(c, a, b):
                     out.append(c)

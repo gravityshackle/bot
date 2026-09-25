@@ -215,13 +215,15 @@ def active_levels(b: dict, s_lo: int) -> list[tuple[str, float]]:
     return uniq
 
 
-def minor_levels(b: dict, s_lo: int) -> list[tuple[str, float]]:
-    """S11 is explicitly allowed to fire off a MINOR level."""
+def minor_levels(b: dict, s_lo: int) -> list[tuple[str, float, str]]:
+    """S11 is explicitly allowed to fire off a MINOR level. Each carries its
+    side, since S11's cross direction must match it."""
     sw = structure.last_confirmed_swings(b["piv"], s_lo)
     # is_major is nullable; pd.NA means unclassified, which is not "minor"
     sw = sw[sw["is_major"].fillna(True).astype(bool).eq(False)]
-    return [("minor swing", float(x))
-            for x in sw["price"].to_numpy()[-MAX_SWING_LEVELS:]]
+    sw = sw.iloc[-MAX_SWING_LEVELS:]
+    return [(f"minor swing {k}", float(x), str(k))
+            for x, k in zip(sw["price"], sw["kind"])]
 
 
 def _range_blocks(ltf: pd.DataFrame, s_lo: int, s_hi: int) -> list[tuple[int, int]]:
@@ -322,9 +324,9 @@ def collect(b: dict) -> pd.DataFrame:
                              "pierce_extreme": float(c["pierce_extreme"]),
                              "bars_to_resolve": int(c["bars_to_resolve"])}})
 
-        for name, lvl in minor_levels(b, s_lo):
+        for name, lvl, side in minor_levels(b, s_lo):
             mo = triggers.momentum_continuation(sub, _feats(sub), lvl, p,
-                                                bias_sub, vol_sub)
+                                                bias_sub, vol_sub, side=side)
             rows += _tag(mo, gpos, name)
 
         for lo, hi in _range_blocks(ltf, s_lo, s_hi):

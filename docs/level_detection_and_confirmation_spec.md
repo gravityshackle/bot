@@ -77,7 +77,7 @@ that has to match. Major swings keep §4's buffer, since §8/§9's break is
 buffered. One shared function, two thresholds, each matching the trigger
 definition it actually serves — not one threshold assumed to serve both.
 
- A broken swing high is simply dropped, not treated
+A broken swing high is simply dropped, not treated
 as new support, even though "broken resistance becomes support" is a
 commonly-cited discretionary concept. This is a deliberate simplification for
 v1, not an oversight — role-reversal adds real complexity (whether a flipped

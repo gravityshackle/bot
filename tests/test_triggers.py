@@ -441,13 +441,13 @@ BELOW = (100.0, 100.4, 99.6, 100.0)      # closes under a 100.5 minor level
 CROSS = (100.0, 103.2, 99.9, 103.0)      # crosses it, body ratio ~0.91
 
 
-def _mom(rows, bias_val="bullish", vol_ok=True, level=100.5):
+def _mom(rows, bias_val="bullish", vol_ok=True, level=100.5, side="high"):
     df = mk(rows)
     n = len(rows)
     return triggers.momentum_continuation(
         df, feats_of(df), level, P,
         pd.Series([bias_val] * n, index=df.index),
-        pd.Series([vol_ok] * n, index=df.index))
+        pd.Series([vol_ok] * n, index=df.index), side=side)
 
 
 def test_momentum_requires_trend_body_and_volume():
@@ -486,3 +486,37 @@ def test_momentum_can_fire_again_after_price_returns():
 def test_momentum_first_bar_is_never_an_event():
     """No prior bar means no transition to observe -- same rule as breakouts()."""
     assert _mom([CROSS]).empty
+
+
+AT_LEVEL = (100.0, 100.5, 99.9, 100.5)      # closes exactly at the 100.5 level
+DOWN = (100.5, 100.55, 99.3, 99.4)          # strong close below, ratio ~0.88
+
+
+def test_a_swing_high_never_yields_short_momentum():
+    """Spec S11: the cross must match the level's side. Found on real data: a
+    close exactly at a swing high's extreme, then a strong lower close, read
+    as a downward 'cross' and produced a short off a swing HIGH."""
+    assert _mom([AT_LEVEL, DOWN], bias_val="bearish", side="high").empty
+
+
+def test_a_swing_low_never_yields_long_momentum():
+    at_low = (101.0, 101.1, 100.5, 100.5)
+    up = (100.5, 102.0, 100.45, 101.9)
+    assert _mom([at_low, up], bias_val="bullish", side="low").empty
+
+
+def test_a_swing_low_yields_short_momentum_on_a_downward_close():
+    above = (101.0, 101.2, 100.6, 101.0)
+    out = _mom([above, DOWN], bias_val="bearish", side="low")
+    assert len(out) == 1 and out.iloc[0]["direction"] == triggers.SHORT
+
+
+def test_momentum_side_is_required_and_validated():
+    df = mk([BELOW, CROSS])
+    flat = pd.Series(["bullish"] * 2, index=df.index)
+    ok = pd.Series([True] * 2, index=df.index)
+    with pytest.raises(TypeError):
+        triggers.momentum_continuation(df, feats_of(df), 100.5, P, flat, ok)
+    with pytest.raises(ValueError, match="side"):
+        triggers.momentum_continuation(df, feats_of(df), 100.5, P, flat, ok,
+                                       side="up")

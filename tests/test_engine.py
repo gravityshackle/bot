@@ -140,6 +140,27 @@ def test_a_sub_buffer_cross_of_a_minor_swing_is_its_only_momentum_event():
     assert [m.idx for m in mo] == [13]
 
 
+def test_no_short_momentum_off_a_minor_swing_high():
+    """Regression, end to end (4 of 3,249 momentum events on real data). Bar
+    12 closes exactly at the 100.4 minor high; bar 13 closes strongly below
+    it in a bearish trend. That is not a break of a swing high."""
+    rows = rows_with({12: (100.0, 100.4, 99.9, 100.4),
+                      13: (100.4, 100.45, 99.2, 99.3)})
+    c = ctx(frame(rows), piv=pivots((100.4, "high", 10, False)), bias="bearish")
+    assert kinds(engine.level_dependent_candidates(c), "momentum") == []
+
+
+def test_minor_highs_and_lows_on_one_tick_stay_separate_levels():
+    """Merging them would leave one level with no single side to match.
+    Closes sit exactly at 100.4, which kills neither (both rules are strict)."""
+    at = (100.0, 100.5, 99.9, 100.4)
+    c = ctx(frame([at] * N), piv=pivots((100.4, "high", 10, False),
+                                          (100.4, "low", 30, False)))
+    sides = sorted(side for side, lv in engine.minor_level_intervals(c)
+                   if lv.price == 100.4)
+    assert sides == ["high", "low"]
+
+
 def test_an_unclassified_swing_is_neither_major_nor_minor():
     strong = (100.2, 101.5, 100.1, 101.4)
     c = ctx(frame(rows_with({15: strong})), piv=pivots((100.4, "high", 10, pd.NA)))
