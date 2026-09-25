@@ -564,7 +564,26 @@ Each was measured on real data before being resolved (3,738 candidates then):
 Structural, no decision: S17 magnitude is always 1.0 (it resolves within
 `K_confirm_max` bars or expires).
 
-**Still open, see #17:** S18 says to reduce confidence on momentum in the
-exhausted direction, but continuation's directional context is fixed at 1.0.
-Measured: momentum fires into exhaustion in 6.4% of its candidates (136 of
-2,133; 3.4% MNQ to 10.8% MGC), almost all intraday.
+**S18 vs continuation, resolved:** S18 says to reduce confidence on momentum
+in the exhausted direction, but continuation's directional context was fixed
+at 1.0. Momentum fires into exhaustion in 6.4% of its candidates (136 of
+2,133; 3.4% MNQ to 10.8% MGC), almost all intraday. Resolved as 0.6 context
+for momentum only.
+
+---
+
+## 17. OPEN: three-tail ranks last despite the highest base score
+
+With the scoring spec as first built, three-tail averaged 57.6, the lowest of
+any trigger type, against momentum's 61.9, despite base scores of 1.00 vs
+0.60. Its trigger-quality edge (+9.5 points) was cancelled by confirmation
+strength (-10.1: quiet tail bars, volume 0.22 and CLV 0.30) and directional
+context (-6.4: momentum's continuation context is a full 15 points by
+construction). CLV-only confirmation is the first step. If three-tail stays
+near the bottom, its confirmation needs a basis drawn from the cluster's own
+tail character, since a single bar's volume or CLV measures the wrong thing
+for a multi-bar pattern.
+
+A separate, larger question: 94% of momentum setups score the full 15
+points of directional context by construction. Whether fresh-but-unremarkable
+continuation should ever score below 1.0 is left open.

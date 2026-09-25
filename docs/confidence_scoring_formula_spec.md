@@ -175,6 +175,15 @@ overall quality. Both scores are read on the bar the trigger completes on
 (the 10-minute bar for three-tail); no volume baseline leaves the score
 unscored, not zero.
 
+**Three-tail (§19) is scored on CLV alone:** `confirmation_strength =
+clv_score`. Its tail bars are small-bodied and quiet by construction, the
+reason it is exempt from gate 3, and averaging volume in cost it about 10
+points against every other type (volume score 0.22 vs 0.70–0.80). The volume
+score is still logged for it. This is expected to be a small move, since its
+own CLV averages only 0.30; if three-tail still ranks at the bottom, the
+better basis is the cluster's own tail character rather than any single
+bar's volume or CLV (open_questions #17).
+
 ### 3. Level Confluence (weight 0.20)
 
 Count distinct level *types* (prior day H/L, weekly H/L, major swing point, gap
@@ -205,8 +214,19 @@ context support this trade") from opposite trigger categories:
 - **Continuation-type triggers never reach this component with a bad
   alignment** — resolved as a Stage 1 hard gate (see gate 5 above), not a
   Stage 2 score. A continuation trigger reaching scoring at all means HTF
-  bias already matched trade direction, so this branch is always `1.0` for
+  bias already matched trade direction, so this branch is `1.0` for
   continuation types; there's no `0.0` case to score here anymore.
+  - **Except momentum firing into exhaustion: `0.6`.** When §18's exhaustion
+    flag is active in momentum's own trade direction (any timeframe in
+    `time_count.timeframes`, read on the entry bar before the pattern, the
+    same anchor as the reversal branch), this is riding a possibly tiring
+    trend. That is reduced, but not treated like fighting a trend (0.2): it is
+    still trend-aligned by construction. This resolves §18's "reduce
+    confidence on momentum-continuation triggers in the exhausted direction",
+    which the fixed 1.0 had left applied nowhere. It applies to momentum only,
+    which §18 names; breakout/retest and §17 keep 1.0. It is expected to touch
+    about 6% of momentum setups. Whether fresh-but-unremarkable continuation
+    should ever score below 1.0 is a separate, larger question left open.
 - **If trigger is reversal-type** (rejection candle, three-tail, failed
   breakout, range reclaim, engulfing):
   - `1.0` if Time Count exhaustion flag (§18) is active in the direction being
