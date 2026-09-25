@@ -30,6 +30,11 @@ Each is a real-data finding, recorded in docs/open_questions.md #16:
 - Level confluence counts the traded level's own type, so an isolated real
   level scores 1/3 rather than the same as open space.
 - Volatility fit's reversal row is gate 5's closed reversal list.
+- Three-tail's confirmation is its CLV alone: its tail bars are quiet by
+  construction, the reason it is exempt from gate 3.
+- Momentum firing into S18 exhaustion in its own direction scores 0.6
+  context instead of 1.0, resolving S18's "reduce confidence on momentum in
+  the exhausted direction" against the fixed continuation value.
 
 ## Unknown stays unknown
 
@@ -144,6 +149,7 @@ class ScoreBreakdown:
     confirmation_strength: float
     cs_volume: float
     cs_clv: float
+    cs_basis: str
     level_confluence: float
     lc_types: str
     directional_context: float
@@ -215,13 +221,18 @@ def trigger_quality(c: Candidate, sc: ScoreContext):
 
 
 def confirmation_strength(c: Candidate, sc: ScoreContext):
-    """average(volume_score, clv_score), both on the trigger's own bar."""
+    """average(volume_score, clv_score), both on the trigger's own bar --
+    except three-tail, whose confirmation is its CLV alone. The volume score
+    is still computed and logged for it, so the log shows what was left out."""
     frame = sc.gates.tfs.frame(c.role)
     mult = float(sc.gates.params.get("volume_expansion.multiplier"))
     ratio = frame[VOLUME_RATIO].iloc[c.idx] if VOLUME_RATIO in frame else math.nan
     vol = math.nan if pd.isna(ratio) else min(float(ratio) / (2.0 * mult), 1.0)
     clv = max(0.0, float(frame[CLV].iloc[c.idx]) * _dir(c))
-    return (vol + clv) / 2.0, vol, clv
+    if c.kind == "three_tail" and not bool(
+            sc.weights.get("confirmation.three_tail_uses_volume")):
+        return clv, vol, clv, "clv only (three-tail)"
+    return (vol + clv) / 2.0, vol, clv, "average(volume, clv)"
 
 
 def level_confluence(c: Candidate, sc: ScoreContext):
@@ -243,16 +254,31 @@ def _entry_anchor(c: Candidate, sc: ScoreContext) -> int:
     return int((sc.gates.entry["ts"] < t0).sum()) - 1
 
 
+def _exhausted_tf(sc: ScoreContext, at: int, direction: int) -> str | None:
+    """The first configured timeframe whose S18 count, as known at entry bar
+    `at`, is exhausted in `direction` (+1 up, -1 down)."""
+    if at < 0:
+        return None
+    for tf, ex in sc.exhaustion.items():
+        if ex["exhausted"].iloc[at] == 1 and ex["count_direction"].iloc[at] == direction:
+            return tf
+    return None
+
+
 def directional_context(c: Candidate, sc: ScoreContext):
     v = sc.weights
-    if c.kind in CONTINUATION:
-        return float(v.get("directional_context.continuation")), "continuation"
     at = _entry_anchor(c, sc)
-    faded = -_dir(c)                     # a long fades a DOWN run
-    if at >= 0:
-        for tf, ex in sc.exhaustion.items():
-            if ex["exhausted"].iloc[at] == 1 and ex["count_direction"].iloc[at] == faded:
-                return float(v.get("directional_context.exhausted")), f"exhausted:{tf}"
+    if c.kind in CONTINUATION:
+        # S18: momentum into exhaustion in its own direction is reduced.
+        # Only momentum -- S18 names it; breakout/retest and S17 keep 1.0.
+        tf = _exhausted_tf(sc, at, _dir(c)) if c.kind == "momentum" else None
+        if tf:
+            return (float(v.get("directional_context.continuation_exhausted")),
+                    f"continuation_exhausted:{tf}")
+        return float(v.get("directional_context.continuation")), "continuation"
+    tf = _exhausted_tf(sc, at, -_dir(c))      # a long fades a DOWN run
+    if tf:
+        return float(v.get("directional_context.exhausted")), f"exhausted:{tf}"
     bias = sc.gates.bias.iloc[c.decision_idx]
     if pd.isna(bias) or bias == "unknown":
         return math.nan, "unknown"
@@ -290,7 +316,7 @@ def score(r: GateReport, sc: ScoreContext) -> ScoreBreakdown:
                          "stands in for a failed gate")
     c = r.candidate
     tq, base, m, basis = trigger_quality(c, sc)
-    cs, vol, clv = confirmation_strength(c, sc)
+    cs, vol, clv, cs_basis = confirmation_strength(c, sc)
     lc, types = level_confluence(c, sc)
     dc, case = directional_context(c, sc)
     rrq = reward_risk_quality(r, sc)
@@ -300,5 +326,5 @@ def score(r: GateReport, sc: ScoreContext) -> ScoreBreakdown:
                  reward_risk_quality=rrq, volatility_fit=vf)
     w = sc.weights.get("weights")
     total = 100.0 * sum(w[k] * parts[k] for k in COMPONENTS)   # NaN propagates
-    return ScoreBreakdown(total, tq, base, m, basis, cs, vol, clv, lc, types,
-                          dc, case, rrq, vf, regime)
+    return ScoreBreakdown(total, tq, base, m, basis, cs, vol, clv, cs_basis,
+                          lc, types, dc, case, rrq, vf, regime)

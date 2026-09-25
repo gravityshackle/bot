@@ -34,6 +34,11 @@ magnitude:
   undefined_midpoint: 0.5
 
 # --- 2. confirmation strength --------------------------------------------
+confirmation:
+  # Three-tail's confirmation is its CLV alone. Its tail bars are quiet by
+  # construction (volume score averaged 0.22 vs 0.70-0.80 for every other
+  # type), which is also why it is exempt from gate 3.
+  three_tail_uses_volume: false
 # volume_score = min(volume_ratio / (2 x volume_expansion.multiplier), 1)
 # clv_score    = max(0, CLV x direction)  -- signed: a close against the
 #                trade is not confirmation (spec amended; abs() was backwards)
@@ -45,6 +50,9 @@ level_confluence:
 # --- 4. directional context -----------------------------------------------
 directional_context:
   continuation: 1.0              # gate 5 guarantees HTF alignment
+  # Momentum firing into S18 exhaustion in its own direction: riding a
+  # possibly tiring trend -- reduced, not treated as fighting it (0.2).
+  continuation_exhausted: 0.6
   exhausted: 1.0                 # S18 exhaustion active in the faded direction
   with_trend: 1.0                # reversal in the HTF direction (spec amended)
   neutral: 0.5

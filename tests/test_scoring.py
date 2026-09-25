@@ -294,3 +294,81 @@ def test_only_candidates_are_scored():
     assert not rep.is_candidate
     with pytest.raises(ValueError, match="candidate"):
         scoring.score(rep, sctx(c))
+
+
+# --------------------------------------------------------------------------
+# three-tail confirmation is CLV only
+# --------------------------------------------------------------------------
+
+def _s19_ctx(vol_ratio=0.3):
+    tt = frame(rows_with({7: (100, 100.4, 97.1, 100.2), 8: (100, 100.4, 96.9, 100.2),
+                          9: (100, 100.4, 97.0, 100.2)})[:20], vol_ratio=vol_ratio)
+    c = ctx(frame([FLAT] * N), tt=tt)
+    return c, Candidate("three_tail", "long", "three_tail", 9, 20, (7, 8, 9), 97.0)
+
+
+def test_three_tail_confirmation_is_its_clv_alone():
+    """Its tail bars are quiet by construction (volume score averaged 0.22 on
+    real data), the reason it is exempt from gate 3. Naive: average in volume
+    anyway, which scored three-tail's confirmation ~10 points under others."""
+    c, three = _s19_ctx(vol_ratio=0.3)
+    s = score(three, c)
+    assert s.confirmation_strength == pytest.approx(s.cs_clv)
+    assert s.cs_basis == "clv only (three-tail)"
+
+
+def test_three_tail_is_scored_without_a_volume_baseline():
+    """Volume is not an input to it, so its absence is not 'unknown'."""
+    c, three = _s19_ctx(vol_ratio=math.nan)
+    s = score(three, c)
+    assert not math.isnan(s.score)
+
+
+def test_other_types_still_average_volume_and_clv():
+    s = score(cand(), ctx(frame(rows_with({20: REJ}), vol_ratio=2.25)))
+    assert s.confirmation_strength == pytest.approx((s.cs_volume + s.cs_clv) / 2)
+    assert s.cs_basis == "average(volume, clv)"
+
+
+# --------------------------------------------------------------------------
+# momentum into exhaustion (S18)
+# --------------------------------------------------------------------------
+
+STRONG = (100.2, 101.5, 100.1, 101.4)
+
+
+def _exh(e, at, direction):
+    ex = pd.DataFrame({"exhausted": False, "count_direction": 0}, index=e.index)
+    ex.loc[at, ["exhausted", "count_direction"]] = [True, direction]
+    return {"1h": ex}
+
+
+def test_momentum_into_exhaustion_scores_reduced_context():
+    """S18: reduce confidence on momentum in the exhausted direction. Naive:
+    continuation is always 1.0, so S18's clause applied nowhere."""
+    e = frame(rows_with({20: STRONG}))
+    s = score(cand("momentum", level=100.4), ctx(e), exhaustion=_exh(e, 19, 1))
+    assert (s.directional_context, s.dc_case) == (0.6, "continuation_exhausted:1h")
+
+
+def test_momentum_exhaustion_is_read_on_the_bar_before_the_pattern():
+    """Same anchor as the reversal branch: exhausted through bar 19 only."""
+    e = frame(rows_with({20: STRONG}))
+    ex = _exh(e, 19, 1)
+    ex["1h"].loc[20, ["exhausted", "count_direction"]] = [False, 0]
+    s = score(cand("momentum", level=100.4), ctx(e), exhaustion=ex)
+    assert s.directional_context == 0.6
+
+
+def test_exhaustion_against_the_momentum_does_not_reduce_it():
+    e = frame(rows_with({20: STRONG}))
+    s = score(cand("momentum", level=100.4), ctx(e), exhaustion=_exh(e, 19, -1))
+    assert (s.directional_context, s.dc_case) == (1.0, "continuation")
+
+
+def test_only_momentum_is_reduced_by_exhaustion():
+    """S18 names momentum; breakout/retest keeps full continuation context."""
+    e = frame(rows_with({20: REJ}))
+    retest = cand("breakout_retest", level=90.0, bars_=(18, 19, 20))
+    s = score(retest, ctx(e), exhaustion=_exh(e, 17, 1))
+    assert (s.directional_context, s.dc_case) == (1.0, "continuation")
