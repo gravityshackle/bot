@@ -29,6 +29,19 @@ Symmetric for swing low using `low`.
   the following swing instead, the target wouldn't exist yet when the gate
   needs to evaluate it. Don't measure depth forward, even though "retracement"
   reads more naturally that way in isolation.
+- **Liveness — when a major swing stops being a level.** A confirmed major
+  swing is a live level (for "at a marked level", and as the "next major
+  level" target in §15) exactly as long as price has not *closed* beyond it
+  since it confirmed: a swing high is dead once any bar closes above it, a
+  swing low once any bar closes below it. There is no recency window and no
+  tunable. A wick through does not kill it, only a close, the same
+  close-not-wick distinction as §4. Found necessary on real data: counting
+  every confirmed major swing in the history left roughly 470 "levels" live
+  at a typical bar. Nearly any price was then near one (gate 2 passed 90–95%
+  of triggers), and the next major level was usually a few ticks past entry
+  (median RR ≈ 0.15, gate 4 rejected ~95% of setups). A dead swing does not
+  flip to become the opposite side's level. That is a deliberate v1
+  simplification (exit spec, "intentionally NOT built into v1").
 
 ## 2. Prior Day / Week High-Low
 

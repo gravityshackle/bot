@@ -81,8 +81,8 @@ before the confirmation candle closes):
 
 | Trigger type | Entry limit price |
 |---|---|
-| Breakout/retest (§9), Confirmation Signal (§17) | At the level being retested, ± 1 tick in your favor |
-| Rejection candle (§7), three-tail (§19), engulfing | At or near the confirmation candle's close (price is already at the level for these) |
+| Breakout/retest (§9), Confirmation Signal (§17) | At the level being retested, ± 1 tick in your favor (a *better* price: 1 tick below the level for a long, above it for a short) |
+| Rejection candle (§7), three-tail (§19), engulfing, failed breakout (§8), range reclaim (§10) | At or near the confirmation candle's close (price is already at the level for these) |
 | Momentum continuation (§11) | At the minor level referenced in the trigger |
 
 **Time-in-force**: entry limit order stays live for `K_entry_expire` bars
@@ -244,3 +244,7 @@ emergency flatten).
   want to override one of these limits, that has to be a manual, outside-the-
   bot decision on your part — never a code path the system can trigger on its
   own reasoning.
+- No polarity flip for broken levels: a major swing dies when price closes
+  beyond it (level spec §1) and does not come back as the opposite side's
+  support/resistance. This is a deliberate v1 simplification, not an
+  oversight. Revisit in Phase 4 with backtest evidence.

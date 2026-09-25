@@ -27,7 +27,8 @@ A setup that fails any of these is discarded before scoring, full stop:
    the level-detection spec): rejection candle, breakout/retest, failed breakout,
    range reclaim, momentum continuation, confirmation-signal breakout, engulfing,
    or three-tail cluster.
-2. **Level present** — the trigger occurred at or near a marked level (§2–§6),
+2. **Level present** — the trigger occurred at or near a marked level (§1–§6;
+   §1 major swings count only while live, per §1's liveness rule),
    not in open space, with two exceptions: **momentum continuation** (it can
    fire off a minor level per §11's own definition — this was always a
    "minor level satisfies it" clarification, not a true no-level exemption),
