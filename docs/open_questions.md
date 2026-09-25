@@ -572,7 +572,7 @@ for momentum only.
 
 ---
 
-## 17. OPEN: three-tail ranks last despite the highest base score
+## 17. DEFERRED TO PHASE 4: three-tail ranks last despite the highest base score
 
 With the scoring spec as first built, three-tail averaged 57.6, the lowest of
 any trigger type, against momentum's 61.9, despite base scores of 1.00 vs
@@ -587,3 +587,56 @@ for a multi-bar pattern.
 A separate, larger question: 94% of momentum setups score the full 15
 points of directional context by construction. Whether fresh-but-unremarkable
 continuation should ever score below 1.0 is left open.
+
+**Measured after CLV-only (523cfb1):** three-tail averages 58.3, still 7th of
+7, 3.2 points behind momentum.
+
+**Cluster-level volume tested as a replacement basis; not implemented.** Both
+the mean and the pooled volume ratio across the cluster's tail bars were
+checked against the forward-outcome proxy, the same test the gate 3 sweep
+used (263 setups, all resolved). Neither separates outcomes: rank correlation
+with R is essentially zero (+0.000, p = 1.00; +0.001, p = 0.99), and the
+high-volume third did no better than the low one. It would also have lowered
+three-tail's confirmation further (0.24 vs CLV's 0.30).
+
+**CLV-only stays as the basis.** It is the only basis tested with any signal:
+top vs bottom third +1.70R (p = 0.015), with win rate rising 10% → 14% → 17%.
+That signal is weak. The rank correlation is not significant (p = 0.16), and
+the 0.015 does not survive correcting for four bases tested (about 0.06).
+
+**Three-tail's own composite score does not order its outcomes at this
+sample size either:** its middle third did best (+1.14R) and its high third
+worst (-0.15R). This is a sample-fragility finding, not evidence that the
+scoring design is wrong. **Five winning trades supply half of all positive R
+across 263 setups at a 14% win rate**, so any tercile-based conclusion from
+this dataset is weak evidence, not a verdict.
+
+**Explicitly unresolved.** This does not establish that three-tail doesn't
+deserve its base score. It is deferred to Phase 4, where a real fill model
+and a multi-year window can test it with enough winning trades to mean
+something (see docs/phase4_questions.md).
+
+---
+
+## 18. DEFERRED TO PHASE 4: MET rolls fall through to the calendar backstop
+
+**Config:** `config/symbols/MET.yaml > rollover` (`rule: volume_crossover`,
+`confirm_days: 2`, `calendar_backstop_days: 2`)
+
+Recorded at the time only in commit `3d33d2b` (Phase 1 roll tuning), which
+predates this file: MET's day-to-day volume swings keep resetting the
+consecutive-day crossover streak, so its rolls fall through to the calendar
+backstop instead of firing on the volume crossover by design. The proposed fix
+was a smoothed volume comparison, deliberately not tuned blind on three months.
+
+Re-measured on the current code: all 3 MET rolls are backstop rolls (06-24,
+07-29, 08-26), and so is MCL's August roll (08-17). MGC and SIL roll by
+crossover. The June backstop rolls on MES/MNQ/MYM (06-15) and MCL (06-16)
+have a different, mundane cause: the data starts 06-12, leaving no room for a
+two-day streak. They are a window-edge artifact, handled by documentation
+alone, and self-resolving under a multi-year window, where only the first
+roll meets the edge. This corrects `3d33d2b`'s claim that the index micros
+rolled by crossover.
+
+Tracked as docs/phase4_questions.md A11, to be validated with Phase 1's own
+roll-quality metric (C7).
