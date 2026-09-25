@@ -1,0 +1,62 @@
+# Stage 2 confidence scoring -- docs/confidence_scoring_formula_spec.md.
+#
+# Every number here is the spec's STARTING DEFAULT. The spec is explicit that
+# the weights are what a logistic regression should later re-derive from
+# labelled trades; nothing in signal_engine/scoring.py hardcodes them.
+
+weights:                         # must sum to 1.0
+  trigger_quality: 0.25
+  confirmation_strength: 0.20
+  level_confluence: 0.20
+  directional_context: 0.15
+  reward_risk_quality: 0.15
+  volatility_fit: 0.05
+
+# --- 1. trigger quality ---------------------------------------------------
+# trigger_quality = base x (floor + (1 - floor) x magnitude)
+base_scores:
+  three_tail: 1.00
+  confirmation_signal: 0.90
+  breakout_retest: 0.85
+  engulfing: 0.80
+  rejection: 0.70
+  failed_breakout: 0.70
+  range_reclaim: 0.70
+  momentum: 0.60
+
+magnitude:
+  floor_multiplier: 0.85         # magnitude moves quality within 0.85-1.00
+  # Momentum: min(body_ratio / this, 1). A number the spec writes inline.
+  momentum_full_body_ratio: 0.8
+  # S8 failed breakout and S10 range reclaim: the spec defines no magnitude
+  # for them, so they take the neutral midpoint, documented as such in every
+  # log row (open_questions #16).
+  undefined_midpoint: 0.5
+
+# --- 2. confirmation strength --------------------------------------------
+# volume_score = min(volume_ratio / (2 x volume_expansion.multiplier), 1)
+# clv_score    = max(0, CLV x direction)  -- signed: a close against the
+#                trade is not confirmation (spec amended; abs() was backwards)
+
+# --- 3. level confluence --------------------------------------------------
+level_confluence:
+  full_score_types: 3            # min(distinct_types / 3, 1)
+
+# --- 4. directional context -----------------------------------------------
+directional_context:
+  continuation: 1.0              # gate 5 guarantees HTF alignment
+  exhausted: 1.0                 # S18 exhaustion active in the faded direction
+  with_trend: 1.0                # reversal in the HTF direction (spec amended)
+  neutral: 0.5
+  against_trend: 0.2             # fading a strong, non-exhausted HTF trend
+
+# --- 5. reward/risk quality -----------------------------------------------
+# min((RR - targets.min_reward_risk) / (targets.rr_cap - min_reward_risk), 1)
+
+# --- 6. volatility fit ----------------------------------------------------
+# Breakout group: the continuation triggers. Reversal group: gate 5's closed
+# reversal list -- the spec's row names only rejection and three-tail, and is
+# silent on engulfing, failed breakout and range reclaim (open_questions #16).
+volatility_fit:
+  breakout: {high: 1.0, normal: 1.0, low: 0.5}
+  reversal: {high: 0.6, normal: 1.0, low: 1.0}

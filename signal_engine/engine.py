@@ -1,8 +1,9 @@
 """Signal Engine orchestration: enumerate every trigger, run the gates, log.
 
-Phase 3 is log-only: this produces the record of every trigger that fired
-and what each Stage 1 gate said about it, for hand review against charts.
-Stage 2 scoring (`scoring.py`) is not built yet, so nothing here is ranked.
+Phase 3 is log-only: this produces the record of every trigger that fired,
+what each Stage 1 gate said about it, and -- for the candidates that passed
+every gate -- the Stage 2 score with every component and the inputs behind
+it, for hand review against charts.
 
 ## Enumerating level-dependent triggers causally
 
@@ -41,7 +42,7 @@ import pandas as pd
 
 from features import confirmation_signal, levels, structure, triggers
 from features.schema import ATR, VOLUME_EXPANDED, tick_size
-from signal_engine import gates
+from signal_engine import gates, scoring
 from signal_engine.gates import Candidate, GateContext, GateReport
 from signal_engine.timeframes import TimeframeSet
 
@@ -284,7 +285,13 @@ def candidates(ctx: GateContext) -> list[Candidate]:
 # the log
 # ==========================================================================
 
-def report_row(r: GateReport, ctx: GateContext) -> dict:
+SCORE_COLUMNS = ["score"] + [f"s_{f}" for f in
+                              scoring.ScoreBreakdown.__dataclass_fields__
+                              if f != "score"]
+
+
+def report_row(r: GateReport, ctx: GateContext,
+               sc: "scoring.ScoreContext | None" = None) -> dict:
     c, plan = r.candidate, r.plan
     row = {
         "symbol": ctx.tfs.symbol,
@@ -300,12 +307,21 @@ def report_row(r: GateReport, ctx: GateContext) -> dict:
     for f in ("entry", "stop", "target", "rr", "target_source",
               "disagreement_flag"):
         row[f] = getattr(plan, f) if plan is not None else None
+    # Stage 2 only for Stage 1 candidates; everything else carries no score
+    # at all, never a low one.
+    if sc is not None and r.is_candidate:
+        row.update(scoring.score(r, sc).row())
+    else:
+        row.update({k: None for k in SCORE_COLUMNS})
     return row
 
 
-def run(ctx: GateContext) -> pd.DataFrame:
-    """One row per trigger, every gate's verdict alongside it."""
-    rows = [report_row(gates.evaluate(c, ctx), ctx) for c in candidates(ctx)]
+def run(ctx: GateContext, sc: "scoring.ScoreContext | None" = None
+        ) -> pd.DataFrame:
+    """One row per trigger: every gate's verdict, and for candidates the full
+    score breakdown. `sc` defaults to one built from `ctx`."""
+    sc = sc or scoring.ScoreContext.build(ctx)
+    rows = [report_row(gates.evaluate(c, ctx), ctx, sc) for c in candidates(ctx)]
     return pd.DataFrame(rows)
 
 

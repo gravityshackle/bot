@@ -14,19 +14,30 @@ import pandas as pd
 import pytest
 
 from features import confirmation, levels
-from features.schema import CLV
-from signal_engine import engine
+from features.schema import CLV, VOL_REGIME, VOLUME_RATIO
+from signal_engine import engine, scoring
 from tests.test_gates import FLAT, N, bars, ctx, params, pivots, rows_with
 
 SWING = (100.4, "high", 10, True)          # pivot at 8, confirmed at 10
 
 
 def frame(rows):
-    """Gate-test bars plus the candle anatomy the detectors read."""
+    """Gate-test bars plus the candle anatomy the detectors read, and the
+    volume ratio / regime that scoring reads."""
     df = bars(rows)
     df = pd.concat([df, confirmation.candle_anatomy(df)], axis=1)
     df[CLV] = confirmation.clv(df)
+    df[VOLUME_RATIO] = 1.5
+    df[VOL_REGIME] = "normal"
     return df
+
+
+def run(c):
+    """engine.run with S18 exhaustion supplied (the test frames carry no
+    daily or hourly frame to compute it from)."""
+    flat = pd.DataFrame({"exhausted": False, "count_direction": 0},
+                        index=c.entry.index)
+    return engine.run(c, scoring.ScoreContext.build(c, exhaustion={"5min": flat}))
 
 
 def kinds(cands, kind):
@@ -101,7 +112,7 @@ def test_a_sub_buffer_close_does_not_cost_the_real_breakout():
     c = ctx(frame(rows), piv=pivots(SWING))
     fb = kinds(engine.level_dependent_candidates(c), "failed_breakout")
     assert [f.idx for f in fb] == [16]
-    log = engine.run(c)
+    log = run(c)
     assert (log.loc[log["kind"] == "failed_breakout", "g2_level"] == "pass").all()
 
 
@@ -208,7 +219,7 @@ def test_a_level_held_by_two_sources_yields_each_event_once():
 
 def test_run_logs_every_trigger_with_every_gate():
     c = ctx(frame(rows_with({15: BREAK, 16: FAIL_BACK})), piv=pivots(SWING))
-    log = engine.run(c)
+    log = run(c)
     assert len(log) == len(engine.candidates(c)) >= 1
     for g, name in {1: "structure", 2: "level", 3: "confirmation",
                     4: "reward_risk", 5: "htf_alignment", 6: "risk_veto"}.items():
@@ -220,6 +231,23 @@ def test_run_logs_every_trigger_with_every_gate():
 def test_a_failed_breakout_passes_gate_2_on_the_level_it_broke():
     """End to end: enumeration and gate 2's anchor agree on the level."""
     c = ctx(frame(rows_with({15: BREAK, 16: FAIL_BACK})), piv=pivots(SWING))
-    log = engine.run(c)
+    log = run(c)
     fb = log[log["kind"] == "failed_breakout"]
     assert (fb["g2_level"] == "pass").all()
+
+
+def test_every_candidate_row_carries_its_full_score_breakdown():
+    """Spec: log every component alongside the final score. The total must be
+    reproducible from the logged parts, and a non-candidate carries no score
+    at all -- not a low one."""
+    c = ctx(frame(rows_with({15: BREAK, 16: FAIL_BACK})), piv=pivots(SWING))
+    log = run(c)
+    for col in ["score"] + [f"s_{k}" for k in scoring.COMPONENTS] + [
+            "s_tq_magnitude_basis", "s_lc_types", "s_dc_case", "s_vf_regime"]:
+        assert col in log.columns, col
+    cand = log[log["is_candidate"]]
+    assert len(cand) >= 1
+    w = scoring.load_scoring().get("weights")
+    rebuilt = 100 * sum(w[k] * cand[f"s_{k}"] for k in scoring.COMPONENTS)
+    assert (rebuilt - cand["score"]).abs().max() < 1e-9
+    assert log.loc[~log["is_candidate"], "score"].isna().all()

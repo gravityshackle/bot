@@ -374,9 +374,53 @@ def gate_structure(c: Candidate, ctx: GateContext) -> GateResult:
     return GateResult(1, PASS, c.kind)
 
 
-def _near(price: float, marks: list[tuple[str, float]], tol: float
-          ) -> list[str]:
-    return [n for n, lv in marks if abs(price - lv) <= tol]
+@dataclass(frozen=True)
+class LevelHits:
+    """Which marked levels a setup is at -- the one test that gate 2 and
+    Stage 2's level confluence share, so the two cannot disagree."""
+    status: str                        # PASS | FAIL | UNKNOWN
+    at: int                            # entry bar the levels were read on
+    tol: float = math.nan
+    hits: tuple[tuple[str, float], ...] = ()
+    detail: str = ""
+
+
+def level_hits(c: Candidate, ctx: GateContext) -> LevelHits:
+    """Marked levels within the S6 test zone of this setup.
+
+    Level-defined triggers are read on the bar BEFORE their pattern starts
+    (see `gate_level`); everything else on the decision bar. Triggers that
+    carry a level (level-defined, three-tail, momentum) are matched on that
+    price; the level-free patterns on whether any of their bars reached a
+    marked level's zone.
+    """
+    at = c.decision_idx
+    if c.kind in LEVEL_DEFINED:
+        at = c.pattern_bars[0] - 1
+        if at < 0:
+            return LevelHits(UNKNOWN, at, detail="pattern starts on the first bar")
+    atr = ctx.entry[ATR].iloc[at]
+    if pd.isna(atr):
+        return LevelHits(UNKNOWN, at,
+                         detail="ATR not seeded; no test-zone tolerance")
+    tol = float(triggers.test_zone(pd.Series([atr]), ctx.params).iloc[0])
+    marks = marked_levels(ctx, at)
+
+    if c.kind in LEVEL_DEFINED or c.kind in ("three_tail", "momentum"):
+        if pd.isna(c.level):
+            return LevelHits(FAIL, at, tol, detail=f"{c.kind} carries no level")
+        hits = [(n, lv) for n, lv in marks if abs(c.level - lv) <= tol]
+    else:
+        frame = ctx.tfs.frame(c.role)
+        hits = []
+        for b in c.pattern_bars:
+            hi, lo = float(frame["high"].iloc[b]), float(frame["low"].iloc[b])
+            hits += [(n, lv) for n, lv in marks
+                     if (lo <= lv <= hi) or min(abs(hi - lv), abs(lo - lv)) <= tol]
+    if hits:
+        return LevelHits(PASS, at, tol, tuple(hits),
+                         ", ".join(sorted({n for n, _ in hits})))
+    return LevelHits(FAIL, at, tol, detail=f"no marked level within {tol:g}")
 
 
 def gate_level(c: Candidate, ctx: GateContext) -> GateResult:
@@ -395,38 +439,13 @@ def gate_level(c: Candidate, ctx: GateContext) -> GateResult:
     whether the pattern happened at a marked level, and that is decided at
     the moment it began. A level that only became marked later does not count.
     """
-    p = ctx.params
     if c.kind == "momentum":
         return GateResult(2, PASS, "exempt: momentum fires off a minor level")
-    if c.kind == "three_tail" and not bool(p.get("three_tail.requires_nearby_level")):
+    if c.kind == "three_tail" and not bool(
+            ctx.params.get("three_tail.requires_nearby_level")):
         return GateResult(2, PASS, "exempt: three-tail may fire in open space")
-
-    at = c.decision_idx
-    if c.kind in LEVEL_DEFINED:
-        at = c.pattern_bars[0] - 1
-        if at < 0:
-            return GateResult(2, UNKNOWN, "pattern starts on the first bar")
-    atr = ctx.entry[ATR].iloc[at]
-    if pd.isna(atr):
-        return GateResult(2, UNKNOWN, "ATR not seeded; no test-zone tolerance")
-    tol = float(triggers.test_zone(pd.Series([atr]), p).iloc[0])
-    marks = marked_levels(ctx, at)
-
-    if c.kind in LEVEL_DEFINED or c.kind == "three_tail":
-        if pd.isna(c.level):
-            return GateResult(2, FAIL, f"{c.kind} carries no level")
-        hits = _near(c.level, marks, tol)
-    else:
-        frame = ctx.tfs.frame(c.role)
-        hits = []
-        for b in c.pattern_bars:
-            hi, lo = float(frame["high"].iloc[b]), float(frame["low"].iloc[b])
-            for name, lv in marks:
-                if (lo <= lv <= hi) or min(abs(hi - lv), abs(lo - lv)) <= tol:
-                    hits.append(name)
-    if hits:
-        return GateResult(2, PASS, ", ".join(sorted(set(hits))))
-    return GateResult(2, FAIL, f"no marked level within {tol:g}")
+    lh = level_hits(c, ctx)
+    return GateResult(2, lh.status, lh.detail)
 
 
 def gate_confirmation(c: Candidate, ctx: GateContext) -> GateResult:
