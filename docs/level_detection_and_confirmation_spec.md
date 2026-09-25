@@ -29,30 +29,78 @@ Symmetric for swing low using `low`.
   the following swing instead, the target wouldn't exist yet when the gate
   needs to evaluate it. Don't measure depth forward, even though "retracement"
   reads more naturally that way in isolation.
-- **Liveness — when a major swing stops being a level.** A confirmed major
-  swing is a live level (for "at a marked level", and as the "next major
-  level" target in §15) exactly as long as price has not *closed* beyond it
-  by §4's breakout buffer since it confirmed: a swing high is dead once any
-  bar closes above `high + buffer`, a swing low once any bar closes below
-  `low - buffer`, with `buffer = max(2 ticks, 0.1 × ATR(entry_timeframe))`
-  on the closing bar. This is the same threshold §4 uses for a breakout, so
-  "the level broke" and "the level died" are one question with one answer.
-  There is no recency window and no new tunable. A wick through does not
-  kill it, and neither does a close inside the buffer. Found necessary on
-  real data: counting every confirmed major swing in the history left
-  roughly 470 "levels" live at a typical bar. Nearly any price was then near
-  one (gate 2 passed 90–95% of triggers), and the next major level was
-  usually a few ticks past entry (median RR ≈ 0.15, gate 4 rejected ~95% of
-  setups). A dead swing does not
-  flip to become the opposite side's level. That is a deliberate v1
-  simplification (exit spec, "intentionally NOT built into v1").
 
-  The buffer matters. With a bare close as the kill threshold, a close just
-  beyond the level but inside the buffer killed the swing without being a
-  breakout, and the real, buffer-cleared breakout that followed was then of
-  a dead level. Every S8/S9 built on it failed gate 2. Measured across all
-  seven instruments, 19% of major-swing deaths were such sub-buffer closes,
-  losing 14% of the S8/S9 triggers on swing levels (24% on MET).
+**Liveness — when a major swing stops being a level.** A confirmed major
+swing is a live level (for "at a marked level" and as the "next major level"
+target in §15) exactly as long as price has not closed beyond it by §4's
+breakout buffer since it confirmed: a swing high is dead once any bar closes
+above `high + buffer`, a swing low once any bar closes below `low - buffer`,
+with `buffer = max(2 ticks, 0.1 × ATR(entry_timeframe))` on the closing bar.
+This is the same threshold §4 uses for a breakout, so "the level broke" and
+"the level died" are one question with one answer, not two independently-
+defined ones. A wick through does not kill it, and neither does a close
+inside the buffer. There is no recency window and no new tunable.
+
+**The buffer matters — this was not a hypothetical concern.** With a bare
+close as the kill threshold (the original version of this rule), a close
+just beyond the level but inside the buffer killed the swing without
+qualifying as a breakout under §4 — so a later, real, buffer-cleared
+breakout of that same level was checked against a level already marked dead,
+and every S8/S9 trigger built on it failed gate 2 for a reason unrelated to
+the trigger's own quality. Measured across all seven instruments: 19% of
+major-swing deaths were sub-buffer closes (up to 27% on MET), costing 14% of
+S8/S9 triggers on swing levels overall (24% on MET) — not a rare edge case.
+The net effect on setups passing all gates was smaller and mixed (+9%
+overall, flat or down by one on MES/MYM), because the fix also leaves more
+swings alive in general, which makes gate 2 slightly easier to pass but
+places some targets slightly nearer, partly offsetting the recovered
+triggers with lower RR elsewhere. The correctness case doesn't depend on
+that net number, though — dying to a close that doesn't meet the breakout
+definition, then failing a real breakout of the same level because of it,
+was a genuine inconsistency regardless of its net downstream size.
+
+**Minor-swing liveness is a separate rule from major-swing liveness — found
+necessary when the buffer fix above had an unintended side effect on
+momentum.** `mark_swing_deaths()` is shared code, and applying §4's buffer
+threshold to *minor* swings as well as major ones broke a property momentum
+depended on: §11's own trigger is a bare close through a minor level, with
+no buffer, so a close just past a minor level but inside the buffer no
+longer killed it — meaning momentum could fire once on that first cross,
+then fire *again* if price dipped back and crossed a second time before
+finally clearing the buffer. "First cross only" had quietly become "every
+cross until the buffer clears," on a trigger type that already accounts for
+61% of everything passing all gates. The same principle that motivated the
+major-swing fix resolves this in the opposite direction: **minor swings die
+on a bare close, with no buffer** — because the only trigger defined against
+a minor swing (§11 momentum) is itself a bare close, so that's the threshold
+that has to match. Major swings keep §4's buffer, since §8/§9's break is
+buffered. One shared function, two thresholds, each matching the trigger
+definition it actually serves — not one threshold assumed to serve both.
+
+A broken swing high is simply dropped, not treated
+as new support, even though "broken resistance becomes support" is a
+commonly-cited discretionary concept. This is a deliberate simplification for
+v1, not an oversight — role-reversal adds real complexity (whether a flipped
+level can flip back, its own separate liveness rule) for a concept that's
+genuinely more debated than "a broken level stops being the thing it was."
+The swing-detection pipeline may already capture much of this behavior
+naturally, since a genuine hold at a former resistance level will simply
+form a new swing point there. Revisit only with real backtest evidence of a
+specific gap, in Phase 4 — not now.
+
+Confirmed necessary on real data: counting every confirmed major swing in
+the full history (not just live ones) left roughly 470 "levels" active at a
+typical trigger bar — nearly any price was then near one (gate 2 passed
+90–95% of triggers, no real filtering), and the "next major level" target
+was usually a few ticks past entry (median RR ≈ 0.15, gate 4 rejected ~95%
+of setups). A sweep across four candidate liveness definitions confirmed
+"unbroken only" is the sole option where both gates function as real filters
+rather than one being a rubber stamp and the other a near-total block (gate
+4 pass rate 61–63% under "unbroken only" vs. 3–8% under "all confirmed,"
+median RR moving from ~0.15 to ~2.5). Recency-window alternatives ("last 3
+per side," "last 5 per side") were rejected — they're arbitrary proxies for
+the same underlying concept liveness measures directly, and they add a
+tunable with no structural basis.
 
 ## 2. Prior Day / Week High-Low
 
@@ -362,15 +410,12 @@ handle a "both" label as a distinct, non-directional case.
 bars — it also covers a doji's *bare side*: on a bar with a zero body, the
 ratio check `wick >= 2.0 × body` reduces to `wick >= 0`, which a side with
 no wick at all passes. The guard adds exactly one condition, `wick > 0`: a
-side with no wick is never a tail. It sets no minimum length — on a
-zero-body bar, a 1-tick wick still passes the ratio check, and on a
-near-zero body so does any wick at least 2× the body. That residual is why
-genuinely two-sided dojis remain on liquid instruments; whether to add a
-minimum wick length is an open question pending real-data numbers
-(open_questions #14), not something this guard does. The bare-side case
-affects every instrument, not only thin ones. Confirmed on real data: MET's
-S19 event count dropped from 306 to 36 bars (10-minute frame) and its two-sided count from 151 to 0 once
-the guard was in place. **Correction to the original claim in this doc**: §7
+side with no wick is never a tail. **It sets no minimum length** — on a
+zero-body bar a 1-tick wick still passes, and on a near-zero body so does
+any wick at least 2x the body. This affects every instrument, not only thin
+ones. Confirmed on real data: MET's S19 event count dropped from 306 to 36
+bars (10-minute frame) and its two-sided count from 151 to 0 once the guard
+was in place. **Correction to the original claim in this doc**: §7
 (rejection) and §20 (engulfing) were not actually exposed to this at current
 parameter settings — their counts were unchanged when the guard was added,
 and both are now pinned by regression tests confirming that. The guard
@@ -378,6 +423,19 @@ still correctly lives in the shared candle-anatomy code (not duplicated per
 trigger type), since it protects against a class of degenerate input that
 could affect any wick-ratio-based check under different settings later — it
 just happens that only S19 was actually hit by it as currently configured.
+
+**Resolved — no minimum wick length added.** A real sensitivity sweep on
+liquid instruments (MES/MGC/MNQ/MYM) showed: tick-based floors don't
+transfer across instruments (a typical 10-min ATR runs ~22 ticks on MES vs.
+~159 on MNQ), the only ATR-based floor that meaningfully clears the residual
+two-sided bars (0.15x ATR) also discards 18-35% of otherwise-clean
+single-sided events, and the remaining two-sided bars have genuinely large
+wicks on both sides rather than looking like detector noise. Since the
+two-sided-bar exclusion already keeps every one of them out of any trade,
+there's no correctness problem left to solve — only a small selectivity
+question whose cheapest fix (adding a floor) costs more real signal than it
+recovers. No floor is the settled default; MCL, MET and SIL have zero
+two-sided bars under any tested rule regardless.
 
 ## 20. Bullish / Bearish Engulfing (Trigger)
 
