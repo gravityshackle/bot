@@ -42,6 +42,19 @@ A setup that fails any of these is discarded before scoring, full stop:
    "weaker evidence" case: `level_confluence` (Stage 2, component 3) already
    scores near zero when nothing is nearby, so the framing holds without
    extra logic.
+
+   **When the level is checked.** For level-free triggers (rejection,
+   engulfing, and three-tail when not exempt), the check is on the decision
+   bar. For **level-defined** triggers (failed breakout §8, breakout/retest
+   §9, range reclaim §10, Confirmation Signal §17), it is on **the bar
+   immediately before the pattern's first bar**: the level must have been a
+   live marked level when the pattern began. The reason is structural. These
+   patterns are built on a close through their level, and under §1's
+   liveness rule that close kills a swing; a range escape likewise drags the
+   rolling range edge onto the escape bar. Checked at the decision bar, the
+   level the pattern is about would already be gone, and gate 2 would fail
+   every breakout-family trigger on a swing level and every range reclaim. A
+   level that only became marked after the pattern began does not count.
 3. **Confirmation present** — volume expansion (§12) is required on every
    trigger type, evaluated on the bar the trigger actually completes on (for
    three-tail specifically, this is the 10-minute bar the cluster completes
