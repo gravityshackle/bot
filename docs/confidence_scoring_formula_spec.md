@@ -140,6 +140,19 @@ trigger_quality = base_score × (0.85 + 0.15 × magnitude_factor)
   - Momentum continuation: `min(body_ratio / 0.8, 1.0)`
   - Confirmation Signal: inverse of bars-to-confirm, `min(K_confirm_max / bars_taken, 1.0)`
     (faster confirmation = more conviction, per Soloway's own emphasis on decisive closes)
+  - **Resolved for the types the list above does not cover:**
+    - Breakout/retest (§9): the retest bar's rejection magnitude (wick/body over
+      2 × `rejection.wick_body_ratio`), since §9 defines that bar as a
+      rejection candle.
+    - Three-tail (§19): each clustered tail bar's ratio is capped first, then
+      averaged across the cluster. Read off one bar, a zero-body tail (ratio
+      infinite) saturated it; 17% of completing bars have a zero body.
+    - Failed breakout (§8) / range reclaim (§10): no magnitude is defined, so
+      they take the neutral midpoint (0.5), logged as such.
+    - Momentum's `0.8` lives in config (`magnitude.momentum_full_body_ratio`).
+  - **Known structural saturation:** a §17 confirmation resolves within
+    `K_confirm_max` bars or expires, so `K_confirm_max / bars_taken` is never
+    below 1 and its magnitude is always 1.0. Harmless while §17 mode is off.
 
 This keeps the 0.85–1.00 multiplier range narrow on purpose — magnitude is a
 tiebreaker within a trigger type, not a way to make a weak trigger type beat a
@@ -151,8 +164,16 @@ strong one.
 confirmation_strength = average(volume_score, clv_score)
 
 volume_score = min(volume_ratio / (2 × volume_expansion_multiplier), 1.0)
-clv_score    = min(abs(CLV) / 1.0, 1.0)   # CLV already bounded [-1, 1]
+clv_score    = max(0, CLV × direction)    # +1 long, -1 short
 ```
+**Resolved: CLV is signed in the trade direction and floored at zero.** The
+original `abs(CLV)` credited a long whose trigger bar closed at its own low as
+fully as one that closed at its high, treating contradictory evidence as
+confirming. That was 4.7% of candidates. Floored rather than negative: a close
+against the trade earns nothing here, and the other components handle
+overall quality. Both scores are read on the bar the trigger completes on
+(the 10-minute bar for three-tail); no volume baseline leaves the score
+unscored, not zero.
 
 ### 3. Level Confluence (weight 0.20)
 
@@ -166,6 +187,14 @@ level_confluence = min(confluent_type_count / 3, 1.0)
 Capped at 3 confluent types for full score — a level with 5 things stacked on
 it isn't meaningfully better evidence than one with 3; don't let this term
 runaway-dominate the total score.
+
+**Resolved:** the traded level's **own type counts**, so an isolated real level
+scores 1/3 rather than the same as open space. Types, not levels: a prior-day
+high and low stacked together are one type. The marked levels are found with
+exactly gate 2's test and on gate 2's bar (the bar before the pattern for
+level-defined triggers). Rejection and engulfing use the levels their bars
+reached; momentum's minor level is not itself a marked type, so only marked
+levels near it count. Channel boundaries count once channels are defined.
 
 ### 4. Directional Context (weight 0.15)
 
@@ -181,12 +210,21 @@ context support this trade") from opposite trigger categories:
 - **If trigger is reversal-type** (rejection candle, three-tail, failed
   breakout, range reclaim, engulfing):
   - `1.0` if Time Count exhaustion flag (§18) is active in the direction being
-    faded.
+    faded, on **any** timeframe in `time_count.timeframes`, read on the entry
+    bar **before the pattern starts**. At the decision bar the reversal bar's
+    own close has already broken the run being faded, so the branch was all
+    but empty by construction (1 of 1,559), the same timing error as gate 2's
+    level check. Higher-timeframe counts align causally.
+  - `1.0` if the reversal is **with** the HTF trend (e.g. a long rejection at
+    support while the HTF is bullish): buying a pullback with the trend, the
+    textbook higher-probability reversal context. The original text had no
+    case for it, and it is 31% of reversal setups.
   - `0.5` if HTF is neutral/chop (no strong trend to fight).
   - `0.2` if fading a strong, non-exhausted HTF trend — this is the lowest-
     conviction case (catching a falling knife with no exhaustion evidence) and
     should score accordingly, not be excluded outright, since reversals do
     occasionally work without a clean exhaustion signal.
+  - HTF bias unknown (still warming up): unscored, not defaulted.
 
 ### 5. Reward/Risk Quality (weight 0.15)
 
@@ -207,13 +245,19 @@ here for setup-type fit:
   (compressed volatility regimes produce more false breakouts).
 - Reversal triggers (rejection, three-tail): `1.0` in normal/low vol, `0.6` in
   high vol (wide bars make wick-based rejection signals noisier).
+- **Resolved:** the rows follow gate 5's classification. Breakout = the
+  continuation triggers (momentum, breakout/retest, §17); reversal = its closed
+  reversal list, which adds engulfing, failed breakout and range reclaim. The
+  original rows named neither of those three.
 
 ---
 
 ## Using the score
 
 - **Ranking**: when multiple symbols/setups qualify simultaneously, take the
-  highest-scoring first, subject to max open positions.
+  highest-scoring first, subject to max open positions. An unscored setup (a
+  component whose input does not exist yet) is not ranked, and never treated
+  as a zero.
 - **Threshold filter**: consider a minimum score floor (e.g., `60`) below which
   a qualifying-but-mediocre setup is skipped entirely — start permissive (e.g.,
   `50`) and raise it once backtest data shows where the win-rate/score

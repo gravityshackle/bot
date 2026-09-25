@@ -544,3 +544,27 @@ bar closes beyond it. There is no recency window, and dead swings do not flip
 sides (a deliberate v1 simplification). Implemented as
 `structure.mark_swing_deaths()` / `live_major_swings()`, used by gate 2's
 marked levels and gate 4's target.
+
+---
+
+## 16. RESOLVED in the scoring spec: Stage 2 gaps found building scoring.py
+
+Each was measured on real data before being resolved (3,738 candidates then):
+
+| Gap | Resolution |
+|---|---|
+| Reversal WITH the HTF trend had no context case (31% of reversals) | 1.0 |
+| Exhaustion read at the decision bar: 1 of 1,559 by construction | the bar before the pattern, any configured timeframe |
+| `abs(CLV)` credited closes against the trade (4.7%) | `max(0, CLV × direction)` |
+| No magnitude for S8/S9/S10 (28%) | S9 = retest-bar rejection; S8/S10 = midpoint 0.5 |
+| Three-tail magnitude off one bar saturates on dojis | mean of capped per-bar ratios |
+| Does the traded level count itself in confluence? | yes, so an isolated level scores 1/3 |
+| Volatility-fit rows silent on engulfing/S8/S10 | gate 5's reversal list |
+
+Structural, no decision: S17 magnitude is always 1.0 (it resolves within
+`K_confirm_max` bars or expires).
+
+**Still open, see #17:** S18 says to reduce confidence on momentum in the
+exhausted direction, but continuation's directional context is fixed at 1.0.
+Measured: momentum fires into exhaustion in 6.4% of its candidates (136 of
+2,133; 3.4% MNQ to 10.8% MGC), almost all intraday.
