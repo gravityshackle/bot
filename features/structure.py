@@ -80,12 +80,17 @@ def align_htf(ltf: pd.DataFrame, htf: pd.DataFrame, values: pd.Series,
     "bullish"/"bearish"/"neutral" aligns identically.
     """
     step = pd.Timedelta(htf_freq)
+    # One resolution for both keys. The intraday resample path yields
+    # microsecond timestamps while the daily frame keeps the base bars'
+    # nanoseconds, and merge_asof refuses mismatched keys -- which made every
+    # daily value unalignable.
+    unit = "datetime64[ns, UTC]"
     right = pd.DataFrame({
-        "htf_close_ts": htf["ts"] + step,
+        "htf_close_ts": htf["ts"].astype(unit) + step,
         "value": values.to_numpy(),
     }).dropna().sort_values("htf_close_ts")
 
-    left = pd.DataFrame({"ts": ltf["ts"]}).sort_values("ts")
+    left = pd.DataFrame({"ts": ltf["ts"].astype(unit)}).sort_values("ts")
     merged = pd.merge_asof(left, right, left_on="ts", right_on="htf_close_ts",
                            direction="backward")
     return pd.Series(merged["value"].to_numpy(), index=ltf.index, name=name)

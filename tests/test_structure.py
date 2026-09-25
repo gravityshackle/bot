@@ -205,6 +205,25 @@ def test_htf_atr_alignment_is_causal():
     assert aligned.dropna().is_monotonic_increasing
 
 
+@pytest.mark.parametrize("ltf_unit,htf_unit", [("us", "ns"), ("ns", "us")])
+def test_alignment_works_across_timestamp_resolutions(ltf_unit, htf_unit):
+    """Regression, found on real data. The intraday resample path yields
+    microsecond timestamps while the daily frame keeps the base bars'
+    nanoseconds, and merge_asof refuses mismatched keys. So aligning ANY daily
+    value (S18's daily exhaustion, for one) onto the entry frame raised."""
+    ltf = frame(100 + np.arange(240) * 0.1, freq="5min")
+    htf = frame(100 + np.arange(20) * 1.0, freq="1h")
+    ltf["ts"] = ltf["ts"].astype(f"datetime64[{ltf_unit}, UTC]")
+    htf["ts"] = htf["ts"].astype(f"datetime64[{htf_unit}, UTC]")
+    vals = pd.Series(np.arange(20, dtype="float64"))
+    aligned = structure.align_htf(ltf, htf, vals, "1h")
+    same = structure.align_htf(ltf.assign(ts=ltf["ts"].astype("datetime64[ns, UTC]")),
+                               htf.assign(ts=htf["ts"].astype("datetime64[ns, UTC]")),
+                               vals, "1h")
+    assert aligned.equals(same)
+    assert pd.isna(aligned.iloc[0]) and aligned.dropna().iloc[0] == 0.0
+
+
 def test_swings_requires_an_htf_atr_series():
     df = frame(100 + np.arange(60) * 0.1)
     with pytest.raises(ValueError, match="ATR\\(14, HTF\\)"):
