@@ -319,9 +319,13 @@ def failed_breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
     close = bars["close"].to_numpy()
     up_ok = only in (None, "up")
     down_ok = only in (None, "down")
+    # Plain arrays, and only the breakout bars visited: a per-bar DataFrame
+    # column lookup made this the dominant cost of scanning every level.
+    up_brk = b["up_break"].to_numpy(dtype=bool)
+    dn_brk = b["down_break"].to_numpy(dtype=bool)
 
-    for i in range(len(bars)):
-        if up_ok and b["up_break"].iloc[i]:
+    for i in map(int, np.flatnonzero(up_brk | dn_brk)):
+        if up_ok and up_brk[i]:
             for j in range(i + 1, min(i + 1 + k, len(bars))):
                 if close[j] < level:
                     events.append(TriggerEvent(
@@ -329,7 +333,7 @@ def failed_breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
                         level=level, price=float(close[j]),
                         meta={"breakout_idx": i, "bars_to_fail": j - i}))
                     break
-        elif down_ok and b["down_break"].iloc[i]:
+        elif down_ok and dn_brk[i]:
             for j in range(i + 1, min(i + 1 + k, len(bars))):
                 if close[j] > level:
                     events.append(TriggerEvent(
@@ -376,20 +380,23 @@ def breakout_retests(bars: pd.DataFrame, level: float, atr: pd.Series,
     """
     k_max = int(params.get("breakout_retest.max_bars_to_retest"))
     b = breakouts(bars, level, atr, params)
-    zone = in_test_zone(bars, level, atr, params)
+    zone = in_test_zone(bars, level, atr, params).to_numpy(dtype=bool)
+    rej = rejection_dir.to_numpy(dtype=object)
     close = bars["close"].to_numpy()
+    up_brk = b["up_break"].to_numpy(dtype=bool)
+    dn_brk = b["down_break"].to_numpy(dtype=bool)
     events: list[TriggerEvent] = []
 
-    for i in range(len(bars)):
+    for i in map(int, np.flatnonzero(up_brk | dn_brk)):
         for up in (True, False):
-            if not (b["up_break"].iloc[i] if up else b["down_break"].iloc[i]):
+            if not (up_brk[i] if up else dn_brk[i]):
                 continue
             want = LONG if up else SHORT
             for j in range(i + 1, min(i + 1 + k_max, len(bars))):
                 failed = close[j] < level if up else close[j] > level
                 if failed:
                     break            # S8 territory, not a retest
-                if zone.iloc[j] and rejection_dir.iloc[j] == want:
+                if zone[j] and rej[j] == want:
                     events.append(TriggerEvent(
                         idx=j, ts=bars["ts"].iloc[j], kind="breakout_retest",
                         direction=want, level=level, price=float(close[j]),
