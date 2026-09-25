@@ -452,11 +452,13 @@ def momentum_continuation(bars: pd.DataFrame, feats: pd.DataFrame,
     long_hit = (strong & vol_ok & up_cross & bull_ok).fillna(False)
     short_hit = (strong & vol_ok & down_cross & bear_ok).fillna(False)
 
+    longs = long_hit.to_numpy(dtype=bool)
+    hits = np.flatnonzero(longs | short_hit.to_numpy(dtype=bool))
     events = [
         TriggerEvent(idx=i, ts=bars["ts"].iloc[i], kind="momentum",
-                     direction=LONG if long_hit.iloc[i] else SHORT,
+                     direction=LONG if longs[i] else SHORT,
                      level=minor_level, price=float(bars["close"].iloc[i]),
                      meta={"body_ratio": float(feats[BODY_RATIO].iloc[i])})
-        for i in range(len(bars)) if long_hit.iloc[i] or short_hit.iloc[i]
+        for i in map(int, hits)
     ]
     return _events_frame(events)
