@@ -56,13 +56,26 @@ A setup that fails any of these is discarded before scoring, full stop:
    every breakout-family trigger on a swing level and every range reclaim. A
    level that only became marked after the pattern began does not count.
 3. **Confirmation present** — volume expansion (§12) is required on every
-   trigger type, evaluated on the bar the trigger actually completes on (for
-   three-tail specifically, this is the 10-minute bar the cluster completes
-   on — its own frame, not the entry frame). CLV (§13) is not a substitute
-   for volume expansion here; it remains part of specific trigger
-   definitions where the level-detection spec already requires it (e.g.,
-   rejection candle §7's own CLV >= 0.6 condition), but it does not satisfy
-   gate 3 on its own for any trigger type.
+   trigger type except three-tail, evaluated on the bar the trigger actually
+   completes on. CLV (§13) is not a substitute for volume expansion here; it
+   remains part of specific trigger definitions where the level-detection
+   spec already requires it (e.g., rejection candle §7's own CLV >= 0.6
+   condition), but it does not satisfy gate 3 on its own for any trigger
+   type.
+
+   **Three-tail (§19) is exempt**, as it is from gate 2
+   (`three_tail.requires_volume_expansion: false`). Its tail bars are
+   small-bodied and quiet by construction. Measured on real data across all
+   seven instruments, the bar that completes a cluster has a median volume
+   ratio of 0.53, against 0.84 for all 10-minute bars. Requiring expansion
+   on that bar kept 15 of 265 otherwise-passing S19 setups, and those 15
+   did no better in a forward check than the rest (1 win in 15, −0.69R,
+   against +0.29R for the 250 without expansion). The sample is small, so
+   this shows no support for the requirement, not that volume hurts. Volume
+   still counts for three-tail through Stage 2's `confirmation_strength`,
+   so a quiet cluster scores lower rather than being excluded. If the flag
+   is set true, the check applies to the 10-minute bar the cluster
+   completes on (its own frame, not the entry frame).
 4. **R:R meets minimum** — `RR >= min_reward_risk` (default 2.0), computed per
    §16 of the level-detection spec.
 5. **Continuation triggers require matching HTF bias** (resolved — previously

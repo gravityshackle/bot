@@ -32,16 +32,27 @@ Symmetric for swing low using `low`.
 - **Liveness — when a major swing stops being a level.** A confirmed major
   swing is a live level (for "at a marked level", and as the "next major
   level" target in §15) exactly as long as price has not *closed* beyond it
-  since it confirmed: a swing high is dead once any bar closes above it, a
-  swing low once any bar closes below it. There is no recency window and no
-  tunable. A wick through does not kill it, only a close, the same
-  close-not-wick distinction as §4. Found necessary on real data: counting
-  every confirmed major swing in the history left roughly 470 "levels" live
-  at a typical bar. Nearly any price was then near one (gate 2 passed 90–95%
-  of triggers), and the next major level was usually a few ticks past entry
-  (median RR ≈ 0.15, gate 4 rejected ~95% of setups). A dead swing does not
+  by §4's breakout buffer since it confirmed: a swing high is dead once any
+  bar closes above `high + buffer`, a swing low once any bar closes below
+  `low - buffer`, with `buffer = max(2 ticks, 0.1 × ATR(entry_timeframe))`
+  on the closing bar. This is the same threshold §4 uses for a breakout, so
+  "the level broke" and "the level died" are one question with one answer.
+  There is no recency window and no new tunable. A wick through does not
+  kill it, and neither does a close inside the buffer. Found necessary on
+  real data: counting every confirmed major swing in the history left
+  roughly 470 "levels" live at a typical bar. Nearly any price was then near
+  one (gate 2 passed 90–95% of triggers), and the next major level was
+  usually a few ticks past entry (median RR ≈ 0.15, gate 4 rejected ~95% of
+  setups). A dead swing does not
   flip to become the opposite side's level. That is a deliberate v1
   simplification (exit spec, "intentionally NOT built into v1").
+
+  The buffer matters. With a bare close as the kill threshold, a close just
+  beyond the level but inside the buffer killed the swing without being a
+  breakout, and the real, buffer-cleared breakout that followed was then of
+  a dead level. Every S8/S9 built on it failed gate 2. Measured across all
+  seven instruments, 19% of major-swing deaths were such sub-buffer closes,
+  losing 14% of the S8/S9 triggers on swing levels (24% on MET).
 
 ## 2. Prior Day / Week High-Low
 
