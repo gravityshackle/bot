@@ -28,18 +28,39 @@ A setup that fails any of these is discarded before scoring, full stop:
    range reclaim, momentum continuation, confirmation-signal breakout, engulfing,
    or three-tail cluster.
 2. **Level present** — the trigger occurred at or near a marked level (§2–§6),
-   not in open space. (Momentum continuation is the one exception — it can fire
-   off a minor level per §11's own definition.)
+   not in open space, with two exceptions: **momentum continuation** (it can
+   fire off a minor level per §11's own definition — this was always a
+   "minor level satisfies it" clarification, not a true no-level exemption),
+   and **three-tail (§19)**, which genuinely can fire in open space. This
+   second exemption resolves a real inconsistency found during gates.py
+   construction: `params.yaml` already had `three_tail.requires_nearby_level:
+   false`, and §19's own text always said an open-space cluster "should
+   score lower," never that it should be excluded — but gate 2 as originally
+   written didn't name three-tail in its exemption list, silently
+   contradicting both. No separate penalty mechanism is needed for the
+   "weaker evidence" case: `level_confluence` (Stage 2, component 3) already
+   scores near zero when nothing is nearby, so the framing holds without
+   extra logic.
 3. **Confirmation present** — volume expansion (§12) or CLV threshold (§13) met,
    per the trigger type's own requirement.
 4. **R:R meets minimum** — `RR >= min_reward_risk` (default 2.0), computed per
    §16 of the level-detection spec.
-5. **No conflicting risk-control veto** — max daily loss not hit, max open
+5. **Continuation triggers require matching HTF bias** (resolved — previously
+   flagged here as "consider making this a hard gate," now decided). Momentum
+   continuation, trend-direction breakout/retest, and Confirmation Signal used
+   as a continuation entry all fail this gate if HTF bias (§14) is neutral or
+   opposite to the trade direction — no exceptions, regardless of how well the
+   rest of the setup scores. This does **not** apply to reversal-type triggers
+   (rejection, three-tail, failed breakout, range reclaim, engulfing), which
+   are never gated by HTF state — they proceed to Stage 2 regardless of bias,
+   where the Directional Context component (below) differentiates conviction
+   instead of gating outright.
+6. **No conflicting risk-control veto** — max daily loss not hit, max open
    positions not exceeded, not in a post-loss cooldown window, symbol passes
    liquidity filter, no unresolved major news flag (per your original risk
    controls list).
 
-If all five pass, proceed to Stage 2. If not, the setup is simply not logged as
+If all six pass, proceed to Stage 2. If not, the setup is simply not logged as
 a candidate — it doesn't get a low score, it doesn't exist as a signal.
 
 ---
@@ -119,14 +140,13 @@ This term handles trend alignment *and* the Time Count exhaustion flag (§18)
 together, because they answer the same underlying question ("does the broader
 context support this trade") from opposite trigger categories:
 
-- **If trigger is continuation-type** (momentum continuation, trend-direction
-  breakout/retest):
-  - `1.0` if HTF trend bias (§14) matches trade direction.
-  - `0.0` if it doesn't — consider making this a **hard gate**, not just a zero
-    score, since a continuation trade against your own trend filter contradicts
-    the entire point of having one.
+- **Continuation-type triggers never reach this component with a bad
+  alignment** — resolved as a Stage 1 hard gate (see gate 5 above), not a
+  Stage 2 score. A continuation trigger reaching scoring at all means HTF
+  bias already matched trade direction, so this branch is always `1.0` for
+  continuation types; there's no `0.0` case to score here anymore.
 - **If trigger is reversal-type** (rejection candle, three-tail, failed
-  breakout, range reclaim):
+  breakout, range reclaim, engulfing):
   - `1.0` if Time Count exhaustion flag (§18) is active in the direction being
     faded.
   - `0.5` if HTF is neutral/chop (no strong trend to fight).
