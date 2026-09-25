@@ -9,6 +9,34 @@ have an actual account to build against.
 
 ---
 
+## Part 0 — Invalidation Level (Stop Basis)
+
+Used throughout this doc and referenced in the level-detection spec's §15,
+but never formally defined until now — found missing during gates.py
+construction. **One rule for every trigger type**: the invalidation level is
+the extreme (lowest low for a long, highest high for a short) of the bars
+that *formed the pattern itself* — the stop sits where the specific evidence
+that justified the trade is proven wrong, not at an artificially tighter
+point chosen to make the R:R math look better.
+
+| Trigger type | Invalidation level |
+|---|---|
+| Rejection candle (§7) | The rejection bar's own extreme |
+| Engulfing (§20) | The extreme across both bars involved (engulfing + engulfed) |
+| Three-tail (§19) | The most extreme wick tip among the clustered tail bars |
+| Failed breakout (§8) / range reclaim (§10) | The extreme of the failed excursion (the wick/close that pierced beyond the level before reverting) |
+| Breakout/retest (§9) | The extreme spanning from the breakout bar through the retest bar |
+| Confirmation Signal (§17) | The extreme spanning from the piercing bar through the confirming (resolve) bar |
+| Momentum continuation (§11) | The trigger bar's own extreme |
+
+A deliberately wider stop from this rule (vs. stopping just beyond the bare
+level) is correct behavior, not a cost — if a setup's real invalidation point
+is genuinely farther away, its real risk is that wide, and if that means it
+no longer clears the R:R gate (§16), that's the gate doing its job, not a
+reason to tighten the stop's definition until it passes.
+
+---
+
 ## Part 1 — Position Sizing
 
 ```
@@ -86,7 +114,10 @@ State: IN_POSITION
     (stop-market, not stop-limit — a guaranteed exit matters more here than a
     few ticks of slippage precision)
   → immediately place resting LIMIT order at primary target:
-      target_price = nearer of (next major level in trade direction, 2R price)
+      target_price = next major level in trade direction if one exists,
+                     else 2R price (2R is a floor/fallback, not a cap —
+                     RR may exceed 2.0 when a farther major level
+                     genuinely supports it)
   → monitor for 1R reached:
       if price reaches 1R in favor → move stop to breakeven (entry price),
       cancel/replace the stop-market order → transition to BREAKEVEN

@@ -335,13 +335,17 @@ handle a "both" label as a distinct, non-directional case.
 
 **The degenerate-wick guard, corrected against the actual implementation
 (`confirmation.wick_dominates()`).** This is broader than pure zero-range
-bars — it also covers a doji's *bare side*: a bar with a real range but a
-zero (or near-zero) body still trivially passes the wick-to-body ratio check
-on whichever side has any wick at all, since almost anything is `>= 2.0 ×
-~0`. The guard requires the wick itself to have real length, not just a
-favorable ratio to a near-zero body — and this affects every instrument, not
-only thin ones. Confirmed on real data: MET's S19 event count dropped from
-306 to 36 bars (10-minute frame) and its two-sided count from 151 to 0 once
+bars — it also covers a doji's *bare side*: on a bar with a zero body, the
+ratio check `wick >= 2.0 × body` reduces to `wick >= 0`, which a side with
+no wick at all passes. The guard adds exactly one condition, `wick > 0`: a
+side with no wick is never a tail. It sets no minimum length — on a
+zero-body bar, a 1-tick wick still passes the ratio check, and on a
+near-zero body so does any wick at least 2× the body. That residual is why
+genuinely two-sided dojis remain on liquid instruments; whether to add a
+minimum wick length is an open question pending real-data numbers
+(open_questions #14), not something this guard does. The bare-side case
+affects every instrument, not only thin ones. Confirmed on real data: MET's
+S19 event count dropped from 306 to 36 bars (10-minute frame) and its two-sided count from 151 to 0 once
 the guard was in place. **Correction to the original claim in this doc**: §7
 (rejection) and §20 (engulfing) were not actually exposed to this at current
 parameter settings — their counts were unchanged when the guard was added,

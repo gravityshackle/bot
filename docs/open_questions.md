@@ -142,7 +142,7 @@ lower on levels where a channel would have counted.
 
 
 
-## 4. Neutral-HTF policy contradicts itself — Phase 3
+## 4. ~~Neutral-HTF policy contradicts itself~~ — RESOLVED (spec §14, scoring gate 5)
 
 
 
@@ -162,11 +162,21 @@ code), or it is a scoring penalty (and §14's "skips" is wrong).
 
 
 
+
+**Resolved:** neutral or opposite HTF bias is a hard gate for
+CONTINUATION-type triggers only: momentum, trend-direction breakout/retest,
+and §17 used as a continuation entry. That is scoring Stage 1 gate 5.
+Reversal-type triggers (rejection, three-tail, failed breakout, range reclaim,
+engulfing) are never gated by HTF. They reach scoring, where Directional
+Context's 1.0 / 0.5 / 0.2 branches differentiate them. Both statements survive:
+§14's "skips" applies to continuation, and scoring's 0.5 branch applies to
+reversals. `trend.neutral_policy` is no longer UNRESOLVED.
+
 ---
 
 
 
-## 5. Hard gate 3 overlaps gate 1 — Phase 3
+## 5. ~~Hard gate 3 overlaps gate 1~~ — RESOLVED (scoring gate 3)
 
 
 
@@ -190,11 +200,19 @@ frequency.
 
 
 
+
+**Resolved:** volume expansion (§12) is required on EVERY trigger type,
+read on the bar the trigger completes on. For three-tail that is the 10min bar
+the cluster completed on, not the entry bar. CLV never satisfies gate 3 on its
+own. It stays inside the trigger definitions that already require it, like
+§7's CLV >= 0.6. So a trigger's internal confirmation does not discharge gate
+3, and rejection candles now also need volume expansion.
+
 ---
 
 
 
-## 6. §15 target wording — Phase 3, cosmetic but worth settling
+## 6. ~~§15 target wording~~ — RESOLVED (spec §15, exit spec Part 3)
 
 
 
@@ -215,6 +233,18 @@ behaviour, but "minimum" describes the opposite of what the rule does.
 ("flag if the two disagree by a lot") but never gives.
 
 
+
+
+**Resolved, and it was not cosmetic.** Taken literally, "nearer" makes every
+passing setup's RR exactly 2.0, which permanently zeroes scoring's
+`reward_risk_quality` term. The target is now the next major level in trade
+direction when one exists, falling back to 2R when none has confirmed yet. 2R
+is the gate's floor, not a cap, so RR can run to `rr_cap` when a farther major
+level supports it. `disagreement_flag_ratio` survives as a logged diagnostic
+note, never a target adjustment. The exit spec's Part 3 carried the same stale
+"nearer of" wording and is corrected too. The stop that RR depends on is now
+defined per trigger in the exit spec's new Part 0 (the pattern's own
+extreme).
 
 ---
 
@@ -459,3 +489,25 @@ ratio test cannot tell a 1-tick wick from a 3-point one. These are excluded as
 no-trade under the §19 ruling above, which is the correct outcome. The open
 question: should a tail also need a minimum wick length in ATR terms? That would
 be a new tunable, so it is a spec decision.
+
+**Minimum wick length — RESOLVED: none.** Swept on the 10min S19 frame (S19
+bars, two-sided in brackets):
+
+| Min wick | MES | MGC | MNQ | MYM |
+|---|---|---|---|---|
+| current (`> 0`) | 83 (9) | 34 (4) | 37 (2) | 79 (8) |
+| 1 tick | 83 (9) | 34 (4) | 37 (2) | 79 (8) |
+| 2 ticks | 83 (7) | 34 (4) | 37 (2) | 78 (8) |
+| 3 ticks | 63 (2) | 34 (4) | 37 (2) | 70 (4) |
+| 0.05 × ATR | 83 (9) | 34 (4) | 37 (2) | 78 (8) |
+| 0.10 × ATR | 81 (7) | 33 (3) | 35 (2) | 73 (6) |
+| 0.15 × ATR | 68 (4) | 30 (3) | 32 (2) | 51 (1) |
+
+MCL, MET and SIL have no two-sided bars under any rule. Tick floors do not
+carry across instruments: a typical 10min ATR is about 22 ticks on MES but 159
+on MNQ. The leftover two-sided bars carry large wicks on both sides relative
+to ATR, so they are genuine. Only 0.15 × ATR clears most of them, and it costs
+18% of MES's S19 events and 35% of MYM's, mostly one-sided. The residual is
+5-11% of S19 bars and already excluded from trading as no-trade under §19. A
+floor would buy selectivity at the cost of clean events, and it would be one
+more tunable to overfit, so none is added.

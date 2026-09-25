@@ -41,8 +41,14 @@ A setup that fails any of these is discarded before scoring, full stop:
    "weaker evidence" case: `level_confluence` (Stage 2, component 3) already
    scores near zero when nothing is nearby, so the framing holds without
    extra logic.
-3. **Confirmation present** — volume expansion (§12) or CLV threshold (§13) met,
-   per the trigger type's own requirement.
+3. **Confirmation present** — volume expansion (§12) is required on every
+   trigger type, evaluated on the bar the trigger actually completes on (for
+   three-tail specifically, this is the 10-minute bar the cluster completes
+   on — its own frame, not the entry frame). CLV (§13) is not a substitute
+   for volume expansion here; it remains part of specific trigger
+   definitions where the level-detection spec already requires it (e.g.,
+   rejection candle §7's own CLV >= 0.6 condition), but it does not satisfy
+   gate 3 on its own for any trigger type.
 4. **R:R meets minimum** — `RR >= min_reward_risk` (default 2.0), computed per
    §16 of the level-detection spec.
 5. **Continuation triggers require matching HTF bias** (resolved — previously
