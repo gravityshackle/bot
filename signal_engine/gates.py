@@ -553,6 +553,20 @@ def gate_reward_risk(c: Candidate, ctx: GateContext
     if plan.risk <= 0:
         return GateResult(4, FAIL, f"stop {plan.stop:g} is not beyond entry "
                                    f"{plan.entry:g}"), plan
+    # Three-tail's entry is its 10min bar's close, but it is decided one entry
+    # bar later. If that bar has already closed beyond the stop, exit spec
+    # Part 2's invalidation-before-fill rule cancels the order: there is no
+    # trade to rate. (Every other trigger enters at or near the decision
+    # bar's close with its stop beyond the pattern, so it cannot happen there.)
+    if c.kind == "three_tail":
+        close = float(ctx.entry["close"].iloc[c.decision_idx])
+        beyond = close < plan.stop if c.direction == LONG else close > plan.stop
+        # a close AT the stop is not beyond it; the stop carries float noise
+        # from the ATR buffer (96.9 - 0.8 = 96.10000000000001)
+        if beyond and not math.isclose(close, plan.stop, abs_tol=1e-9):
+            return GateResult(4, FAIL, f"invalidated before entry: decision bar "
+                                       f"closed at {close:g}, beyond the stop "
+                                       f"{plan.stop:g}"), plan
     min_rr = float(ctx.params.get("targets.min_reward_risk"))
     detail = f"RR {plan.rr:.2f} to {plan.target_source}"
     if plan.disagreement_flag:

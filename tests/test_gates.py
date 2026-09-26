@@ -343,6 +343,53 @@ def test_three_tail_stop_is_the_most_extreme_tail_tip():
     assert plan.invalidation == 96.9 and plan.entry == 100.2
 
 
+TT_CLUSTER = {7: (100, 100.4, 97.1, 100.2), 8: (100, 100.4, 96.9, 100.2),
+              9: (100, 100.4, 97.0, 100.2)}          # entry 100.2, stop 96.1
+
+
+def _s19_decided_on(decision_bar):
+    tt = bars(rows_with(TT_CLUSTER)[:20], freq="10min")
+    entry = bars(rows_with({20: decision_bar}))
+    c = cand("three_tail", role="three_tail", idx=9, decision_idx=20,
+             bars_=(7, 8, 9), level=97.0)
+    return c, ctx(entry, tt=tt)
+
+
+def test_a_three_tail_already_past_its_stop_at_decision_is_invalidated():
+    """Regression, found in the Phase 3 validation plots (33 of 263 real
+    three-tail candidates). The plan's entry is the 10min bar's close, but the
+    setup is decided one entry bar later. When that bar has already closed
+    beyond the stop, exit spec Part 2's invalidation-before-fill rule cancels
+    the order, so it must fail gate 4, not stand as a live candidate that
+    loses 1R on the next bar."""
+    c, k = _s19_decided_on((99.0, 99.2, 95.5, 95.8))   # closes below 96.1
+    r, plan = gates.gate_reward_risk(c, k)
+    assert r.status == FAIL and "invalidated" in r.detail
+    assert plan is not None and plan.stop == pytest.approx(96.1)
+    assert not gates.evaluate(c, k).is_candidate
+
+
+def test_a_three_tail_still_inside_its_stop_at_decision_is_not_invalidated():
+    c, k = _s19_decided_on((99.0, 99.2, 96.0, 96.3))   # dips through, closes above
+    assert gates.gate_reward_risk(c, k)[0].status == PASS
+
+
+def test_closing_exactly_at_the_stop_is_not_beyond_it():
+    c, k = _s19_decided_on((99.0, 99.2, 96.0, 96.1))
+    assert gates.gate_reward_risk(c, k)[0].status == PASS
+
+
+def test_a_short_three_tail_past_its_stop_is_invalidated_too():
+    upper = {7: (100, 102.9, 99.6, 99.8), 8: (100, 103.1, 99.6, 99.8),
+             9: (100, 103.0, 99.6, 99.8)}                # stop 103.1 + 0.8
+    tt = bars(rows_with(upper)[:20], freq="10min")
+    entry = bars(rows_with({20: (100.0, 104.5, 99.9, 104.2)}))
+    c = cand("three_tail", "short", role="three_tail", idx=9, decision_idx=20,
+             bars_=(7, 8, 9), level=103.0)
+    r, _ = gates.gate_reward_risk(c, ctx(entry, tt=tt))
+    assert r.status == FAIL and "invalidated" in r.detail
+
+
 def test_no_major_level_falls_back_to_exactly_2r_and_passes():
     """Spec S15: never discard a setup because no major level has formed."""
     r, plan = gates.gate_reward_risk(cand(), ctx(bars(rows_with({20: REJ}))))
