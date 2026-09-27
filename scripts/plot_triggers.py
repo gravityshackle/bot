@@ -71,7 +71,7 @@ from features.schema import (  # noqa: E402
     tick_size,
 )
 
-SYMBOLS = ["MES", "MNQ", "MYM", "MCL", "MGC", "SIL", "MET"]
+SYMBOLS = ["MES", "MNQ", "MYM", "MCL", "MGC", "SIL", "MET", "MBT"]
 OUT = Path("plots")
 
 # ---------------------------------------------------------------------------

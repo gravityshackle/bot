@@ -32,7 +32,7 @@ from data.resample import resample  # noqa: E402
 from features import levels, risk_state  # noqa: E402
 from features.schema import load_params  # noqa: E402
 
-SYMBOLS = ["MES", "MNQ", "MYM", "MCL", "MGC", "SIL", "MET"]
+SYMBOLS = ["MES", "MNQ", "MYM", "MCL", "MGC", "SIL", "MET", "MBT"]
 OUT = Path("plots")
 SESSIONS_SHOWN = 10
 
