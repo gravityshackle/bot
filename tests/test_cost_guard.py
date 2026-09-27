@@ -95,9 +95,15 @@ def test_confirm_true_still_does_not_bypass_the_cost_ceiling(tmp_path, monkeypat
 
 
 def test_cached_window_is_free_and_needs_no_confirmation():
-    """The pinned Phase 1 window is on disk; reading it must not be gated."""
-    with open("config/data.yaml") as fh:
+    """The pinned Phase 1 window is on disk; reading it must not be gated.
+
+    Pinned explicitly rather than read from config/data.yaml: the live window
+    moved to 5 years for Phase 4, and a test that follows it would look for a
+    cache that may not exist -- and reach the network to price it, which the
+    suite must never do. A cache hit never touches the network."""
+    with open("config/data.yaml", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh)
+    cfg["window"] = {"months": 3, "end": "2026-09-12"}
     r = fetch_ohlcv(cfg, symbol_cfg())
     assert r.from_cache
     assert r.cost_usd == 0.0

@@ -10,10 +10,10 @@ source:
   api_key_env: DATABENTO_API_KEY   # .env only, never committed
 
 window:
-  # Phase 1 validation pass. Deliberately short: the roll-logic edge cases are
-  # covered by offline unit tests, so this only needs enough span to eyeball
-  # real seams. Widen for the Phase 4 backtest pull.
-  months: 3
+  # Phase 4 backtest window: 5 years (docs/phase4_plan.md, signed off
+  # 2026-09-26; priced at $79.78 for all 8 instruments). Phases 1-3 ran on
+  # 3 months (2026-06-12..2026-09-12), whose cache files remain on disk.
+  months: 60
   # PINNED, deliberately. "last_complete_session" makes the cache key move
   # every calendar day, so the cache never hits and each run silently
   # re-bills the full pull. A fixed end also makes Phase 1 reproducible.
@@ -34,8 +34,9 @@ cost_control:
 cache:
   dir: cache/databento
   format: parquet
-  # Cache key includes the window, so widening it later fetches only the
-  # delta rather than re-billing for bars already on disk.
+  # The cache key includes the window's start AND end, so a different window
+  # is a new key and a FULL re-fetch -- widening does not fetch only the
+  # delta. Price any window change before running it.
   reuse_existing: true
 
 timeframes:
