@@ -28,7 +28,14 @@ contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]
 rollover:
   rule: volume_crossover
   confirm_days: 2              # tuned on 3mo real data (Phase 1 sweep)
-  calendar_backstop_days: 2    # last resort only -- must not preempt the crossover
+  # DECIDED 2026-09-26 (open_questions #18, phase4_questions A11): roll ONE
+  # day before expiry. Volume genuinely does not migrate to the next contract
+  # until expiry day itself -- it is not noisy volume resetting the crossover
+  # streak, so a smoothed comparison would only delay the crossover further.
+  # A 2-day backstop held a minority contract for 2 sessions per roll; rolling
+  # on expiry day is ruled out (settlement/liquidity risk). Pinned by
+  # tests/test_continuous_contract.py.
+  calendar_backstop_days: 1
   # RESOLVED by the Phase 1 sweep. Because MET lists 6 near monthlies AND
   # quarterlies further out simultaneously, a quarterly can out-volume a nearby
   # monthly. next_chronological only ever rolls to the next listed contract in

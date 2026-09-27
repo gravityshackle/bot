@@ -618,7 +618,7 @@ something (see docs/phase4_questions.md).
 
 ---
 
-## 18. DEFERRED TO PHASE 4: MET rolls fall through to the calendar backstop
+## 18. DECIDED: MET and MBT roll one day before expiry
 
 **Config:** `config/symbols/MET.yaml > rollover` (`rule: volume_crossover`,
 `confirm_days: 2`, `calendar_backstop_days: 2`)
@@ -659,3 +659,18 @@ options. Roll the day before expiry (a 1-day backstop), which cuts the
 minority-contract sessions from 2 per roll to 1. Accept 2 sessions per roll.
 Or hold the expiring contract into its final day, which is what volume says,
 but carries expiry and settlement risk.
+
+**Decision (2026-09-26): a 1-day backstop for MET and MBT only.** The other
+five keep their Phase 1-tuned backstops. Rolling on expiry day is ruled out:
+the settlement and liquidity risk on the literal expiring session isn't worth
+closing the gap from one minority session to zero.
+
+**Diagnosis carried with the decision:** volume genuinely does not migrate
+until expiry day. It is not noisy volume resetting the streak, and smoothing
+would make it worse. Pinned in `config/symbols/MET.yaml` and `MBT.yaml` and in
+`tests/test_continuous_contract.py`, so a later pass cannot quietly
+reintroduce the smoothing "fix" or change the backstop.
+
+Measured after the change, same 3-month window: MBT's minority-contract
+sessions fell from 6 to 3 (one per roll); MET's from 6 to 4 (one per roll,
+plus the Sunday 07-26 weekend blip).

@@ -31,7 +31,7 @@ contract's bars the whole series is built from, so it belongs in the same pass.)
 | A8 | **Buffer breakout (§4/§9) or confirmation signal (§17), per symbol?** The spec says to A/B them; only `buffer` mode has been run | §17's magnitude is also structurally always 1.0 | level spec §17 and "integrating" note; scoring spec §1 |
 | A9 | **Is the gap threshold too loose for the RTH instruments?** It fires on 58% of MES sessions vs 4–9 gaps on the continuous four, and gap edges feed level confluence | Deliberately not re-thresholded blind | level spec §3 |
 | A10 | **Which entry/HTF timeframe pairing per instrument?** Roles are config (`timeframes.*`), built to be grid-searched | Only 5min/1h/10min/1D has been run | params.yaml `timeframes`; config/data.yaml; open_questions #13 |
-| A11 | **How should MET's (and MBT's) roll be timed?** *Cause corrected 2026-09-26: volume migrates only on expiry day, so the crossover can't beat the backstop; smoothing would delay it further, so the choice is a 1-day vs 2-day backstop vs holding into expiry day (open_questions #18).* Originally recorded as: should MET's roll use a smoothed volume comparison? MET's day-to-day volume swings keep resetting the consecutive-day crossover streak (`rollover.confirm_days: 2`), so its rolls fall through to the calendar backstop instead of firing on the volume crossover by design. The fix proposed in Phase 1 was a smoothed volume comparison, deliberately not tuned blind on three months | Re-measured on the current code: all 3 MET rolls are backstop rolls (06-24, 07-29, 08-26, each 2 days before expiry), and so is MCL's August roll (08-17); MGC and SIL roll by crossover. The June backstop rolls on MES/MNQ/MYM (06-15) and MCL (06-16) are a window-edge artifact: the data starts 06-12, leaving no room for a two-day streak | Recorded only in commit `3d33d2b` (Phase 1 roll tuning), never in open_questions; `config/symbols/MET.yaml > rollover` |
+| A11 | **How should MET's (and MBT's) roll be timed? DECIDED 2026-09-26: a 1-day backstop for MET and MBT only**, not expiry day (settlement risk). *Diagnosis: volume migrates only on expiry day; it is not streak noise, and smoothing would delay it further (open_questions #18). Phase 4 still re-measures roll quality over 5 years (C7).* Originally recorded as: should MET's roll use a smoothed volume comparison? MET's day-to-day volume swings keep resetting the consecutive-day crossover streak (`rollover.confirm_days: 2`), so its rolls fall through to the calendar backstop instead of firing on the volume crossover by design. The fix proposed in Phase 1 was a smoothed volume comparison, deliberately not tuned blind on three months | Re-measured on the current code: all 3 MET rolls are backstop rolls (06-24, 07-29, 08-26, each 2 days before expiry), and so is MCL's August roll (08-17); MGC and SIL roll by crossover. The June backstop rolls on MES/MNQ/MYM (06-15) and MCL (06-16) are a window-edge artifact: the data starts 06-12, leaving no room for a two-day streak | Recorded only in commit `3d33d2b` (Phase 1 roll tuning), never in open_questions; `config/symbols/MET.yaml > rollover` |
 
 ## B. Parameters to grid-search / walk-forward per instrument
 
@@ -82,7 +82,10 @@ below it the trigger fires on most bars (open_questions #7).
    daily volume" (commit `3d33d2b`). Re-run that metric under any smoothed
    comparison for A11, over the multi-year window, where the start-of-window
    edge affects only the first roll.
-8. **Resolve before trusting MET results:** its `session.globex_open` /
+8. **Resolve before trusting MET or MBT results** (MBT added 2026-09-26: its
+   provisional session fields copy MET's and contradict its bars the same
+   way — it trades 7 days with a weekly ~9-hour Friday-evening break and no
+   weekday halt). MET's `session.globex_open` /
    `globex_close` / `maintenance_halt` fields still describe a weekday week
    with a daily halt, which its bars contradict (open_questions #12). They are
    not read by the trade-date logic today, but the risk engine's session clock

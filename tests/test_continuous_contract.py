@@ -429,3 +429,32 @@ def test_no_roll_window_coverage_is_near_total():
                                                 candidate="highest_volume"))
     series = stitch(bars, roll_map, symbol="MCL")
     assert series.bars["volume"].sum() / bars["volume"].sum() > 0.99
+
+
+# --------------------------------------------------------------------------
+# decided roll timing, pinned (open_questions #18, phase4_questions A11)
+# --------------------------------------------------------------------------
+
+def _rollover(sym):
+    import yaml
+    with open(f"config/symbols/{sym}.yaml", encoding="utf-8") as fh:
+        return yaml.safe_load(fh)["rollover"]
+
+
+def test_met_and_mbt_roll_one_day_before_expiry():
+    """Decided 2026-09-26. On MET and MBT, volume genuinely does not migrate
+    to the next contract until expiry day itself (MET still 61-72% in the
+    expiring contract on its old backstop day, MBT 80-84%). It is NOT noisy
+    volume resetting the crossover streak, so smoothing the comparison would
+    only delay the crossover further; do not reintroduce that "fix". A 2-day
+    backstop left the series on a minority contract for 2 sessions per roll.
+    Rolling on expiry day itself is ruled out for settlement/liquidity risk,
+    so the backstop is 1 day: one minority session per roll."""
+    for sym in ("MET", "MBT"):
+        assert _rollover(sym)["calendar_backstop_days"] == 1, sym
+
+
+def test_the_other_five_keep_their_tuned_backstops():
+    """The decision is scoped to MET and MBT; the others were tuned in Phase 1."""
+    expected = {"MES": 3, "MNQ": 3, "MYM": 3, "MCL": 2, "MGC": 2, "SIL": 2}
+    assert {s: _rollover(s)["calendar_backstop_days"] for s in expected} == expected

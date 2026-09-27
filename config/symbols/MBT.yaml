@@ -28,9 +28,15 @@ contract_spec:
 contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]
 rollover:
   rule: volume_crossover
-  # MET's values as a starting point. UNTUNED for MBT: Phase 1 measures them.
-  confirm_days: 2
-  calendar_backstop_days: 2    # last resort only -- must not preempt the crossover
+  confirm_days: 2              # as MET; the backstop decides MBT's rolls
+  # DECIDED 2026-09-26 (open_questions #18, phase4_questions A11): roll ONE
+  # day before expiry. Volume genuinely does not migrate to the next contract
+  # until expiry day itself -- it is not noisy volume resetting the crossover
+  # streak, so a smoothed comparison would only delay the crossover further.
+  # A 2-day backstop held a minority contract for 2 sessions per roll; rolling
+  # on expiry day is ruled out (settlement/liquidity risk). Pinned by
+  # tests/test_continuous_contract.py.
+  calendar_backstop_days: 1
   # A quarterly can out-volume a nearby monthly under this listing pattern, so
   # candidates are chosen by volume, as for MET.
   candidate: highest_volume
