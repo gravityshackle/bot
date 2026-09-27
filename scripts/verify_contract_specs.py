@@ -12,11 +12,11 @@ from ib_async import IB, Future
 
 HOST, PORT, CLIENT_ID = "127.0.0.1", 4002, 17
 
-# (symbol, exchange) for the seven in-scope micros
+# (symbol, exchange) for the in-scope micros; MBT added 2026-09-26
 MICROS = [
     ("MES", "CME"), ("MNQ", "CME"), ("MYM", "CBOT"),
     ("MCL", "NYMEX"), ("MGC", "COMEX"), ("SIL", "COMEX"),
-    ("MET", "CME"),
+    ("MET", "CME"), ("MBT", "CME"),
 ]
 
 

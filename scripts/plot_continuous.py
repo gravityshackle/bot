@@ -32,7 +32,7 @@ from data.pipeline import (  # noqa: E402
     seam_report,
 )
 
-SYMBOLS = ["MES", "MNQ", "MYM", "MCL", "MGC", "SIL", "MET"]
+SYMBOLS = ["MES", "MNQ", "MYM", "MCL", "MGC", "SIL", "MET", "MBT"]
 OUT = Path("plots")
 
 

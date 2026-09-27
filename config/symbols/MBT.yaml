@@ -1,0 +1,66 @@
+# MBT -- Micro Bitcoin. Added after Phase 3, through its own Phases 1-3 before
+# any backtest (docs/symbol_spec_and_repo_structure.md, MBT note).
+# Architecturally a MET twin: continuous session, no RTH/ETH split, its own
+# day_boundary, volume_crossover rollover with highest_volume candidates.
+symbol: MBT
+ib_symbol: MBT
+exchange: CME
+asset_class: crypto
+full_size_equivalent: null      # the full-size BTC future is out of scope
+
+databento:
+  dataset: GLBX.MDP3
+  parent_symbol: MBT.FUT
+  schema: ohlcv-1m
+
+contract_spec:
+  tick_size: 5.0                # index points -- IB minTick, same for every expiry
+  tick_value: 0.50              # USD per tick = multiplier 0.1 x minTick 5.0
+  point_value: 0.10             # IB multiplier
+  currency: USD
+  contract_unit: 0.10           # BTC per contract
+  verified: true                # IB reqContractDetails, paper 4002, 2026-09-26
+  # IB returned an empty timeZoneId and empty tradingHours/liquidHours, so
+  # the session below comes from the bars, not from IB.
+
+# IB lists 6 near monthlies (U6 V6 X6 Z6 F7 G7) and quarterlies further out
+# (H7 M7 U7 Z7 H8) -- MET's pattern, not the quarterly index pattern.
+contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]
+rollover:
+  rule: volume_crossover
+  # MET's values as a starting point. UNTUNED for MBT: Phase 1 measures them.
+  confirm_days: 2
+  calendar_backstop_days: 2    # last resort only -- must not preempt the crossover
+  # A quarterly can out-volume a nearby monthly under this listing pattern, so
+  # candidates are chosen by volume, as for MET.
+  candidate: highest_volume
+
+session:
+  timezone: America/Chicago
+  mode: continuous              # no cash-market session to anchor an RTH to
+  # PROVISIONAL, copied from MET's layout. MET's own fields were found to
+  # contradict its bars (it trades through weekends; open_questions #12). The
+  # Phase 1 session/volume profile decides what these should say for MBT.
+  globex_open: "17:00"          # Sun
+  globex_close: "16:00"         # Fri
+  maintenance_halt: ["16:00", "17:00"]
+  rth_open: null
+  rth_close: null
+  rth_source: not_applicable
+  use_eth_range: true
+
+# Same trade-date cutoff as MET (16:00 CT), pending the volume profile.
+day_boundary: "16:00"
+
+# Spec S12's session-matched baseline is undefined without a session split;
+# hour-of-day matching, as for MET.
+volume_baseline: hour_of_day
+
+risk_notes:
+  dynamic_price_limit_pct: null   # not verified for MBT; not guessed
+  requires_liquidity_sanity_check: true
+
+liquidity_filter:
+  min_avg_volume: null
+
+margin_source: ibkr_api
