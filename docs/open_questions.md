@@ -640,3 +640,22 @@ rolled by crossover.
 
 Tracked as docs/phase4_questions.md A11, to be validated with Phase 1's own
 roll-quality metric (C7).
+
+**Cause corrected (2026-09-26, found onboarding MBT).** The recorded cause is
+wrong, and so is the proposed fix. On each of MET's three backstop roll days
+its expiring contract still carried **61–72% of volume**, and **52–70%** the
+day after. The incoming contract takes over only **on expiry day itself**
+(76–91% on 06-26, 07-31, 08-28). Volume migrates at the last moment, so the
+2-day crossover streak cannot complete before the 2-day backstop fires. The
+weekend swings are real but secondary: one Sunday (07-26) briefly shows the
+incoming contract ahead before weekday volume flips back. MBT, which rolls on
+the same dates, shows the same pattern more sharply (80–84% still in the
+expiring contract on roll day). Its 6 minority-contract sessions in three
+months are exactly the Wednesday and Thursday before each Friday expiry.
+
+So **a smoothed volume comparison is the wrong fix**: smoothing delays the
+crossover further past the backstop. The real choice is between three
+options. Roll the day before expiry (a 1-day backstop), which cuts the
+minority-contract sessions from 2 per roll to 1. Accept 2 sessions per roll.
+Or hold the expiring contract into its final day, which is what volume says,
+but carries expiry and settlement risk.

@@ -252,6 +252,10 @@ test that fails under the current bundled-frame behavior, before writing any
 gates.py logic** — not bundled into the same commit as new gate code, where
 a narrow architectural fix like this is easy to under-test alongside
 unrelated new logic.
+**Resolved in `d522e83`, before any `gates.py` code existed** —
+`candle_triggers()` moved to `signal_engine/candles.py` and reads each pattern
+on its own role's frame, fixed test-first in its own commit. Kept as a record
+that the checkpoint worked.
 
 4. **Backtest Engine.** Replay signals through simulated execution with a
    realistic slippage/fill model and the full Risk Engine. This produces your
