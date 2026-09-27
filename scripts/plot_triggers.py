@@ -112,6 +112,20 @@ STYLE = {
 # Plotting every kind on the price panel buries the price action: the per-bar
 # types fire thousands of times over ten sessions. The selective ones go on
 # price, the dense ones go in the raster underneath, and nothing is dropped.
+# Level-based panels use THIS script's own enumeration: the most recent
+# MAX_SWING_LEVELS swings per session, and range edges taken over the whole
+# consolidation block (which looks ahead). That is not how the Signal Engine
+# enumerates, so these panels are chart-review aids, not validation of the
+# engine's events -- those are re-derived independently by
+# scripts/validate_level_triggers.py (S8/S9/S10/S17) and
+# scripts/validate_momentum.py (S11).
+LEVEL_BASED = {"breakout", "breakout_retest", "failed_breakout", "range_reclaim",
+               "momentum", "confirmation_signal"}
+ENUMERATION_NOTE = ("NOTE: this script's own level enumeration, not the engine's "
+                    "events; see scripts/validate_level_triggers.py")
+MOMENTUM_NOTE = ("NOTE: this check skips HTF trend, transition and side; the "
+                 "engine's momentum is validated by scripts/validate_momentum.py")
+
 ON_PRICE = ["rejection", "three_tail", "breakout_retest", "failed_breakout",
             "range_reclaim"]
 
@@ -853,6 +867,9 @@ def plot_examples(b: dict, picks: dict) -> Path:
             continue
 
         _, e, lines, ok = best
+        if kind in LEVEL_BASED:
+            lines = lines + [ENUMERATION_NOTE] + (
+                [MOMENTUM_NOTE] if kind == "momentum" else [])
         frame = b["tt"] if e["frame"] == "tt" else b["ltf"]
         tf = b["tt_tf"] if e["frame"] == "tt" else b["entry_tf"]
         i = int(e["gidx"])
@@ -941,6 +958,10 @@ def report_lines(b: dict, picks: dict) -> list[str]:
         out.append(f"- exemplar {ts:%Y-%m-%d %H:%M} {tz}, {e['direction']}, "
                    f"check {'OK' if ok else 'MISMATCH'}")
         out += [f"  - {ln}" for ln in lines]
+        if kind in LEVEL_BASED:
+            out.append(f"  - {ENUMERATION_NOTE}")
+            if kind == "momentum":
+                out.append(f"  - {MOMENTUM_NOTE}")
         if info["runners"]:
             # One bar can break several levels, so a bare timestamp can appear
             # twice and read like a duplicate; the level is what separates them.
