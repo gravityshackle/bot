@@ -70,6 +70,7 @@ platform's reported session.
 | GC | COMEX | 0.10 | $10.00 | $100 | G,J,M,Q,V,Z (Feb/Apr/Jun/Aug/Oct/Dec) | RTH convention weakest of this group post-floor-closure — treat as needing empirical confirmation (e.g., highest-volume window) rather than assumed pit hours |
 | SI (micro, traded as SIL) | COMEX | 0.005 | $5.00 | $1,000/pt | F,H,K,N,U,V,X,Z | **IB lookup trap — see note below** |
 | MET | CME | 0.50 (index pts) | $0.05/contract | $0.10/index pt | Monthly (6 near months) + quarterlies further out | **Different asset class — see note below** |
+| MBT (Micro Bitcoin) | CME | *pending* | *pending* | *pending* | *pending* | **Not yet added — see note below** |
 
 **Verified against IB's `reqContractDetails` — two corrections from the original table above:**
 - **IB lists Micro Silver under the symbol `SI`, not `SIL`.** The `SIL` Globex
@@ -122,6 +123,25 @@ respective instruments. Worth including as alternate configs from day one —
 during paper trading / early live testing, trading micros lets you validate
 the full pipeline with real order flow and real slippage at a fraction of the
 dollar risk, before sizing up to full contracts.
+
+**MBT (Micro Bitcoin) — not yet in scope, tracked here so it isn't forgotten
+or added carelessly.** Requested after Phase 3 was complete and the Phase 4
+data pull was already being planned. Deliberately **not** folded into that
+pull — every one of the seven instruments above surfaced at least one real,
+instrument-specific bug at some stage of this build (SIL's ticker/multiplier
+trap, MET's rollover-and-session peculiarities, the RTH asymmetry), and
+adding an eighth instrument silently into a 5-year backtest would skip that
+scrutiny for the one instrument most likely to need it — crypto futures
+share MET's "no real session" oddities and have their own volatility/
+liquidity character never yet exercised through this pipeline. Do not guess
+tick size, multiplier, or contract months from a web source or memory —
+verify via IB's `reqContractDetails`, the same discipline that caught SIL's
+error. Architecturally, treat it like MET: continuous session, no RTH/ETH
+split, its own `day_boundary`, `highest_volume` rollover rule. Run it through
+its own Phase 1 (continuous contract + visual validation), Phase 2
+(features/triggers + chart review), and Phase 3 (gates/scoring) before
+including it in any backtest — it does not skip straight to Phase 4 just
+because the other seven already did.
 
 ## Part 2 — Repo Structure
 
@@ -199,9 +219,40 @@ the next begins:
    trigger flags over real charts and sanity-checking against what you'd mark
    by eye — this is the step most worth spending real time on, since every
    downstream layer inherits its errors silently.
+
+**Standing principle, confirmed the hard way during Phase 1**: internal
+validity checks (monotonic timestamps, valid OHLC, tick-grid alignment) are
+necessary but not sufficient. A perfectly well-formed series can still be
+built from the *wrong* contract entirely if contract selection ever silently
+falls back to an implicit rule — in this build's case, an empty roll map
+caused selection to fall back to alphabetical symbol ordering, and the
+resulting series (a real, valid, monotonic OHLCV series — just of a contract
+almost nobody was trading) passed every schema-level check that existed.
+Every contract-selection code path must resolve by actual trading activity
+(volume), never by an incidental property like symbol string order, and every
+build should carry an automated plausibility guard (e.g., warn if the
+stitched series' volume share drops below a threshold) — don't rely on a
+human happening to notice the bars look thin. This applies to every future
+data source or edge case touching contract/session selection, not just this
+one instance.
 3. **Signal Engine** (gates + scoring). Run against Phase 2 output in
    log-only mode — no execution yet. Review the log of flagged setups by hand
    against charts before trusting the scoring.
+
+**Pre-gates.py checkpoint, confirmed during Phase 2 timeframe-orchestration
+validation**: `candle_triggers()` (the function bundling S7/S19/S20 pattern
+detection) still cannot honor a `three_tail` role that differs from `entry`
+— it computes all three on one shared frame, even though the timeframe
+orchestrator now supports per-role frames correctly elsewhere. This is
+currently harmless only because nothing calls `candle_triggers()` in
+production yet. The moment `gates.py` wires it in, three-tail will silently
+compute on the wrong timeframe (5min instead of its configured 10min) unless
+this is fixed first. **Fix this as its own small commit, with a regression
+test that fails under the current bundled-frame behavior, before writing any
+gates.py logic** — not bundled into the same commit as new gate code, where
+a narrow architectural fix like this is easy to under-test alongside
+unrelated new logic.
+
 4. **Backtest Engine.** Replay signals through simulated execution with a
    realistic slippage/fill model and the full Risk Engine. This produces your
    first real performance numbers — expect several iterations of parameter

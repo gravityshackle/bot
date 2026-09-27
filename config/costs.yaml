@@ -1,0 +1,39 @@
+# Trading costs for the Phase 4 fill model -- per filled contract, per side.
+#
+# Kept apart from strategy parameters so real costs can be updated without
+# touching signal logic. Tick size and tick value are NOT repeated here: they
+# come from each config/symbols/<SYM>.yaml, which were verified against IB's
+# reqContractDetails. One source of truth per fact.
+#
+# Commission: IBKR U.S. futures, low-volume tier (<= 1,000 contracts/month).
+# E-micros count as 1/10 of a contract toward IBKR's volume tiers, so a
+# micro-only strategy is unlikely to leave this tier. Excludes exchange,
+# clearing and regulatory fees, which IBKR passes through separately.
+#
+# estimated_exchange_regulatory_side is a PLACEHOLDER, deliberately
+# conservative, not a quoted schedule. Replace it from IBKR Flex Query /
+# activity-statement fills once a meaningful sample exists.
+
+applies_to: filled_contracts_per_side     # charged on entry AND exit fills
+
+slippage:
+  # Only MARKET orders slip. Entries and targets are limit orders and fill at
+  # their price by design (trade-through fills; see docs/phase4_plan.md).
+  # Market orders in this system: the stop-market exit, the daily-breaker
+  # flatten, and the day-boundary flatten.
+  applies_to: [stop_market_exit, breaker_flatten, day_boundary_flatten]
+  thin_session_multiplier: 1.0             # 2-4x is a sensitivity case, not the default
+
+symbols:
+  MES: {ibkr_commission_side: 0.25, estimated_exchange_regulatory_side: 0.50, slippage_ticks: 1}
+  MNQ: {ibkr_commission_side: 0.25, estimated_exchange_regulatory_side: 0.50, slippage_ticks: 1}
+  MYM: {ibkr_commission_side: 0.25, estimated_exchange_regulatory_side: 0.50, slippage_ticks: 1}
+  MCL: {ibkr_commission_side: 0.25, estimated_exchange_regulatory_side: 0.50, slippage_ticks: 1}
+  MGC: {ibkr_commission_side: 0.25, estimated_exchange_regulatory_side: 0.50, slippage_ticks: 1}
+  SIL: {ibkr_commission_side: 0.25, estimated_exchange_regulatory_side: 0.50, slippage_ticks: 1}
+  # MET and MBT: 2 ticks was suggested for crypto liquidity; the starting
+  # default is 1 tick everywhere, with 2 as a sensitivity case.
+  MET: {ibkr_commission_side: 0.20, estimated_exchange_regulatory_side: 0.50, slippage_ticks: 1}
+  # MBT is NOT yet in the project: its tick size and value come only from IB's
+  # reqContractDetails, and it must clear its own Phases 1-3 first.
+  MBT: {ibkr_commission_side: 0.85, estimated_exchange_regulatory_side: 0.50, slippage_ticks: 1}
