@@ -140,80 +140,159 @@ def _cache_path(cfg: dict, symbol: str, start, end, kind: str) -> Path:
     return d / f"{kind}_{tag}.parquet"
 
 
-def fetch_ohlcv(cfg: dict, symbol_cfg: dict, *, end=None,
-                dry_run: bool = False, confirm: bool = False) -> FetchResult:
-    """Fetch (or load cached) 1m bars for every listed contract of one root.
+def year_chunks(start: pd.Timestamp, end: pd.Timestamp
+                ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Split [start, end) at each 1 January, half-open and contiguous.
 
-    Reading from cache is always free and never needs confirmation. A fetch
-    that would bill requires confirm=True when cost_control
-    .require_explicit_confirmation is set.
+    A window inside one calendar year is a single chunk equal to the window,
+    so its cache file keeps the name it always had.
     """
-    symbol = symbol_cfg["symbol"]
-    src = cfg["source"]
-    start, end_ts = resolve_window(cfg, end)
-    bars_path = _cache_path(cfg, symbol, start, end_ts, "ohlcv1m")
-    meta_path = _cache_path(cfg, symbol, start, end_ts, "meta")
+    out, a = [], start
+    while a < end:
+        b = min(pd.Timestamp(year=a.year + 1, month=1, day=1, tz=a.tz), end)
+        out.append((a, b))
+        a = b
+    return out
 
-    if cfg["cache"]["reuse_existing"] and bars_path.exists() and meta_path.exists():
-        bars = pd.read_parquet(bars_path)
-        metas = _metas_from_frame(pd.read_parquet(meta_path))
-        return FetchResult(bars, metas, 0.0, True,
-                           validate(bars, tick_size=symbol_cfg["contract_spec"]["tick_size"],
-                                    symbol=symbol, strict=False))
 
-    cost = 0.0
-    if cfg["cost_control"]["estimate_before_fetch"]:
-        cost = estimate_cost(cfg, symbol_cfg, start, end_ts)
-        ceiling = float(cfg["cost_control"]["abort_above_usd"])
-        if cost > ceiling:
-            raise CostLimitExceeded(
-                f"{symbol}: estimated ${cost:.2f} exceeds ceiling ${ceiling:.2f} "
-                f"for {start:%Y-%m-%d}..{end_ts:%Y-%m-%d}. Narrow the window or "
-                "raise cost_control.abort_above_usd deliberately."
-            )
-    if dry_run:
-        return FetchResult(pd.DataFrame(), {}, cost, False, [])
+def _atomic_parquet(df: pd.DataFrame, path: Path) -> None:
+    """Write via a temp file and an atomic rename, so a crash mid-write can
+    never leave a truncated file that later reads as a valid cache hit."""
+    tmp = path.with_name(path.name + ".tmp")
+    df.to_parquet(tmp, index=False)
+    os.replace(tmp, path)
 
-    if cfg["cost_control"].get("require_explicit_confirmation", True) and not confirm:
-        raise ConfirmationRequired(
-            f"{symbol}: this would BILL about ${cost:.2f} for "
-            f"{start:%Y-%m-%d}..{end_ts:%Y-%m-%d} (no cache entry for that "
-            "window). Re-run with confirm=True only after the operator has "
-            "approved the spend."
-        )
 
-    metas = fetch_definitions(cfg, symbol_cfg, start, end_ts)
+def _with_one_retry(fn, what: str):
+    """One retry on a dropped stream; a second failure propagates.
 
-    store = _client(cfg).timeseries.get_range(
-        dataset=src["dataset"],
-        symbols=[symbol_cfg["databento"]["parent_symbol"]],
-        stype_in=src["stype_in"],
-        schema=src["schema"],
-        start=start.isoformat(),
-        end=end_ts.isoformat(),
-    )
-    df = store.to_df()
+    The first 5-year attempt died on "Response ended prematurely" while
+    streaming definitions. A retry of a partly streamed request can bill that
+    part again, which is why it is one retry and not a loop.
+    """
+    from databento.common.error import BentoError
+    try:
+        return fn()
+    except BentoError as exc:
+        print(f"  {what}: {exc} -- retrying once", flush=True)
+        return fn()
+
+
+def _fetch_chunk(cfg: dict, symbol_cfg: dict, start, end
+                 ) -> tuple[pd.DataFrame, dict[str, ContractMeta]]:
+    symbol, src = symbol_cfg["symbol"], cfg["source"]
+    what = f"{symbol} {start:%Y-%m-%d}..{end:%Y-%m-%d}"
+    metas = _with_one_retry(lambda: fetch_definitions(cfg, symbol_cfg, start, end),
+                            f"{what} definitions")
+
+    def bars_request():
+        return _client(cfg).timeseries.get_range(
+            dataset=src["dataset"],
+            symbols=[symbol_cfg["databento"]["parent_symbol"]],
+            stype_in=src["stype_in"],
+            schema=src["schema"],
+            start=start.isoformat(),
+            end=end.isoformat(),
+        ).to_df()
+    df = _with_one_retry(bars_request, f"{what} bars")
     if df.empty:
-        return FetchResult(pd.DataFrame(), metas, cost, False, [f"{symbol}: no bars returned"])
+        return pd.DataFrame(columns=["ts", "raw_symbol", "open", "high", "low",
+                                     "close", "volume"]), metas
 
     df = df.reset_index().rename(columns={"ts_event": "ts", "symbol": "raw_symbol"})
     if "raw_symbol" not in df.columns:
         raise SchemaError(f"{symbol}: Databento returned no symbol mapping")
-
     # Drop spreads/combos -- parent symbology includes them and they are not
-    # outright contracts. Anything the month-code parser rejects is not a leg
-    # we trade.
+    # outright contracts.
     root = symbol_cfg["databento"]["parent_symbol"].split(".")[0]
     keep = [raw for raw in df["raw_symbol"].unique() if is_outright(str(raw), root)]
-    df = df[df["raw_symbol"].isin(keep)]
+    return normalize(df[df["raw_symbol"].isin(keep)]), metas
 
-    bars = normalize(df)
-    problems = validate(bars, tick_size=symbol_cfg["contract_spec"]["tick_size"],
-                        symbol=symbol, strict=False)
 
-    bars.to_parquet(bars_path, index=False)
-    _metas_to_frame(metas).to_parquet(meta_path, index=False)
-    return FetchResult(bars, metas, cost, False, problems)
+def _merge_metas(into: dict[str, ContractMeta], more: dict[str, ContractMeta],
+                 symbol: str) -> None:
+    for raw, m in more.items():
+        have = into.get(raw)
+        if have is not None and have.expiration != m.expiration:
+            raise SchemaError(
+                f"{symbol}: contract {raw} has two expirations across chunks "
+                f"({have.expiration} vs {m.expiration}); refusing to guess")
+        into[raw] = m
+
+
+def fetch_ohlcv(cfg: dict, symbol_cfg: dict, *, end=None, dry_run: bool = False,
+                confirm: bool = False, assemble: bool = True) -> FetchResult:
+    """Fetch (or load cached) 1m bars for every listed contract of one root.
+
+    The window is fetched in calendar-year chunks (`year_chunks`), each saved
+    to disk atomically the moment it arrives. A re-run reads saved chunks for
+    free and fetches only the missing ones, so a failure or a killed process
+    loses at most the chunk in flight. A dropped stream is retried once.
+
+    Reading from cache is always free and never needs confirmation. Anything
+    that would bill -- the chunks not yet on disk -- is priced first, refused
+    above cost_control.abort_above_usd IN TOTAL, and requires confirm=True
+    when cost_control.require_explicit_confirmation is set.
+
+    `assemble=False` downloads and caches without concatenating the window in
+    memory; it returns no bars. The bulk pull uses it.
+    """
+    symbol = symbol_cfg["symbol"]
+    start, end_ts = resolve_window(cfg, end)
+    tick = symbol_cfg["contract_spec"]["tick_size"]
+    chunks = year_chunks(start, end_ts)
+    paths = [(_cache_path(cfg, symbol, a, b, "ohlcv1m"), _cache_path(cfg, symbol, a, b, "meta"))
+             for a, b in chunks]
+    reuse = cfg["cache"]["reuse_existing"]
+    pending = [i for i, (bp, mp) in enumerate(paths)
+               if not (reuse and bp.exists() and mp.exists())]
+
+    cost = 0.0
+    if pending and cfg["cost_control"]["estimate_before_fetch"]:
+        cost = sum(estimate_cost(cfg, symbol_cfg, *chunks[i]) for i in pending)
+        ceiling = float(cfg["cost_control"]["abort_above_usd"])
+        if cost > ceiling:
+            raise CostLimitExceeded(
+                f"{symbol}: estimated ${cost:.2f} exceeds ceiling ${ceiling:.2f} "
+                f"for {start:%Y-%m-%d}..{end_ts:%Y-%m-%d} ({len(pending)} chunk(s) "
+                "not on disk). Narrow the window or raise "
+                "cost_control.abort_above_usd deliberately."
+            )
+    if dry_run and pending:
+        return FetchResult(pd.DataFrame(), {}, cost, False, [])
+
+    if pending and cfg["cost_control"].get("require_explicit_confirmation", True) \
+            and not confirm:
+        raise ConfirmationRequired(
+            f"{symbol}: this would BILL about ${cost:.2f} for "
+            f"{start:%Y-%m-%d}..{end_ts:%Y-%m-%d} ({len(pending)} chunk(s) not "
+            "on disk). Re-run with confirm=True only after the operator has "
+            "approved the spend."
+        )
+
+    problems: list[str] = []
+    for i in pending:
+        a, b = chunks[i]
+        bars, metas = _fetch_chunk(cfg, symbol_cfg, a, b)
+        problems += validate(bars, tick_size=tick, symbol=symbol, strict=False) \
+            if len(bars) else []
+        bp, mp = paths[i]
+        _atomic_parquet(bars, bp)                  # bars first: a hit needs both
+        _atomic_parquet(_metas_to_frame(metas), mp)
+
+    if not assemble:
+        return FetchResult(pd.DataFrame(), {}, cost, not pending, problems)
+
+    frames, metas_all = [], {}
+    for bp, mp in paths:
+        frames.append(pd.read_parquet(bp))
+        _merge_metas(metas_all, _metas_from_frame(pd.read_parquet(mp)), symbol)
+    frames = [f for f in frames if len(f)]
+    bars = (normalize(pd.concat(frames, ignore_index=True)) if frames
+            else pd.DataFrame(columns=["ts", "raw_symbol", "open", "high", "low",
+                                       "close", "volume"]))
+    problems = validate(bars, tick_size=tick, symbol=symbol, strict=False) if len(bars) else []
+    return FetchResult(bars, metas_all, cost, not pending, problems)
 
 
 def _metas_to_frame(metas: dict[str, ContractMeta]) -> pd.DataFrame:
