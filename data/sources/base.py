@@ -12,7 +12,6 @@ back-adjustment happen downstream in data/continuous_contract.py, never here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -52,28 +51,45 @@ class SchemaError(ValueError):
     """Raised when a source emits bars that violate the canonical contract."""
 
 
-def parse_raw_symbol(raw: str, root: str) -> tuple[str, int]:
-    """Split a CME globex symbol into (month_code, year).
-
-    Handles both single-digit ("MESZ5") and two-digit ("MESZ25") year forms.
-    Single-digit years are resolved to the decade nearest the current year,
-    which is the CME convention and is unambiguous for any contract listed
-    within +/- 5 years of today.
-    """
-    tail = raw[len(root):]
+def _split_raw_symbol(raw: str, root: str) -> tuple[str, str]:
+    tail = raw[len(root):] if raw.startswith(root) else ""
     if not tail or tail[0] not in MONTH_CODE_TO_NUM:
         raise SchemaError(f"cannot parse month code from {raw!r} (root={root!r})")
     month_code, digits = tail[0], tail[1:]
     if not digits.isdigit():
         raise SchemaError(f"cannot parse year from {raw!r}")
+    return month_code, digits
+
+
+def is_outright(raw: str, root: str) -> bool:
+    """Whether a parent-symbology member is an outright contract (not a spread
+    or combo). Needs no year: it only asks whether the symbol parses."""
+    try:
+        _split_raw_symbol(raw, root)
+        return True
+    except SchemaError:
+        return False
+
+
+def parse_raw_symbol(raw: str, root: str, *, near_year: int) -> tuple[str, int]:
+    """Split a CME globex symbol into (month_code, year).
+
+    Handles both single-digit ("MESZ5") and two-digit ("MESZ25") year forms.
+    A single digit is resolved to the decade nearest `near_year`, which must
+    come from the DATA -- the contract's own expiration year -- never the
+    clock. A contract's year is within one of its expiration year (MCL's
+    January contract expires in December of the prior year), so the nearest
+    decade is unambiguous. Resolving against today instead made the result
+    depend on when the code ran: in 2027 a 2021 "...Z1" would become 2031 and
+    sort as the furthest-out contract in the roll ordering.
+    """
+    month_code, digits = _split_raw_symbol(raw, root)
     if len(digits) >= 2:
-        year = 2000 + int(digits[-2:])
-    else:
-        current = datetime.now().year
-        decade, digit = current - (current % 10), int(digits)
-        # pick the candidate decade whose year is closest to now
-        year = min((decade - 10 + digit, decade + digit, decade + 10 + digit),
-                   key=lambda y: abs(y - current))
+        return month_code, 2000 + int(digits[-2:])
+    digit = int(digits)
+    decade = near_year - (near_year % 10)
+    year = min((decade - 10 + digit, decade + digit, decade + 10 + digit),
+               key=lambda y: abs(y - near_year))
     return month_code, year
 
 

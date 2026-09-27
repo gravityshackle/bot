@@ -24,6 +24,7 @@ from data.sources.base import (
     ContractMeta,
     SchemaError,
     normalize,
+    is_outright,
     parse_raw_symbol,
     validate,
 )
@@ -121,11 +122,12 @@ def fetch_definitions(cfg: dict, symbol_cfg: dict, start, end
 
     metas: dict[str, ContractMeta] = {}
     for raw, grp in df.groupby("raw_symbol"):
-        try:
-            code, year = parse_raw_symbol(str(raw), root)
-        except SchemaError:
+        if not is_outright(str(raw), root):
             continue          # spreads and other non-outright legs
         exp = pd.to_datetime(grp["expiration"].iloc[0], utc=True)
+        # the year comes from the data (this contract's expiration), never
+        # the clock -- see parse_raw_symbol
+        code, year = parse_raw_symbol(str(raw), root, near_year=exp.year)
         metas[str(raw)] = ContractMeta(raw_symbol=str(raw), root=root,
                                        month_code=code, year=year, expiration=exp)
     return metas
@@ -202,13 +204,7 @@ def fetch_ohlcv(cfg: dict, symbol_cfg: dict, *, end=None,
     # outright contracts. Anything the month-code parser rejects is not a leg
     # we trade.
     root = symbol_cfg["databento"]["parent_symbol"].split(".")[0]
-    keep = []
-    for raw in df["raw_symbol"].unique():
-        try:
-            parse_raw_symbol(str(raw), root)
-            keep.append(raw)
-        except SchemaError:
-            pass
+    keep = [raw for raw in df["raw_symbol"].unique() if is_outright(str(raw), root)]
     df = df[df["raw_symbol"].isin(keep)]
 
     bars = normalize(df)
