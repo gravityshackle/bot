@@ -48,3 +48,27 @@ day_boundary:
   # instrument's own day_boundary). Pending entries are cancelled there too.
   # Carrying overnight is a later variant, not the default.
   policy: flatten
+
+exits:
+  # Exit spec Part 3 (corrected, event-driven version). IN_POSITION ->
+  # BREAKEVEN when price reaches this many R in favour. A touch counts: it's
+  # a trigger for replacing an order, not a fill.
+  breakeven_at_r: 1.0
+  # A stop or target change decided on a bar takes effect from the NEXT
+  # 1-minute bar. The bar that reached 1R may have made its low after its
+  # high, and that order is unknowable. The bar that filled the entry can't
+  # trigger breakeven, for the same reason it can't reach the target.
+  order_changes_take_effect: next_bar
+  # BREAKEVEN -> TRAILING fires at the CLOSE of the entry-timeframe bar that
+  # confirms a new swing (pivot + pivot_n_ltf closed bars, the same causal
+  # confirmation the gates use), never at target-touch. It needs a swing on
+  # the stop's side (a swing low for a long) that formed since entry and
+  # confirmed while in BREAKEVEN or TRAILING, whose trailing stop
+  # (swing -/+ buffer) is TIGHTER than the current stop (higher for a long).
+  # A swing that wouldn't move the stop isn't "in the trade's favour", and
+  # cancelling the target for it would only remove the planned exit. Stops
+  # only ratchet; a later, worse swing never loosens one.
+  trail_swing_side: stop_side
+  # "The same ATR buffer used for the initial stop": the buffer amount fixed
+  # at signal time (plan stop minus Part 0 invalidation), not re-measured.
+  trail_buffer: initial

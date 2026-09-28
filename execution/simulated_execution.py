@@ -21,7 +21,7 @@ adverse outcome:
 All price comparisons are in integer ticks, so float noise such as
 70.07 - 0.01 = 70.05999999999999 can't decide a fill. 4.1 takes fixed
 stop and target prices; 4.2's breakeven and trailing stops re-run
-`simulate_exit` over each stretch where the orders are constant.
+`scan_exit` over each stretch where the orders are constant.
 """
 from __future__ import annotations
 
@@ -321,8 +321,22 @@ def simulate_exit(bars: pd.DataFrame, entry: EntryResult, *, direction: str,
     ent = cost.to_ticks(entry.fill.order_price)
     if (ent - stp) * s <= 0:
         raise ValueError(f"stop {stop} is not beyond the entry {entry.fill.order_price}")
+    return scan_exit(bars, entry.bar_pos, direction=direction, stop_ticks=stp,
+                     target_ticks=tgt, contracts=contracts, cost=cost, cfg=cfg,
+                     fill_bar=True)
 
-    start = entry.bar_pos
+
+def scan_exit(bars: pd.DataFrame, start: int, *, direction: str, stop_ticks: int,
+              target_ticks: int | None, contracts: int, cost: CostModel,
+              cfg: ExecConfig, fill_bar: bool) -> ExitResult:
+    """First exit from bar `start` onward, with fixed orders already on the
+    tick grid. `fill_bar`: bar `start` is the one that filled the entry, so
+    its target (and, per config, its stop) can't fill, and a stop that
+    didn't exist at its open can't gap. Otherwise the orders were resting
+    when bar `start` opened (4.2 re-scans from each order change).
+    """
+    s = _sign(direction)
+    stp, tgt = stop_ticks, target_ticks
     w = bars.iloc[start:]
     a = _arrays(w, cost)
     n = len(w)
@@ -330,12 +344,12 @@ def simulate_exit(bars: pd.DataFrame, entry: EntryResult, *, direction: str,
     td = w["trade_date"].to_numpy()
 
     hit_stop = (a["low"] <= stp) if s > 0 else (a["high"] >= stp)
-    if not cfg.stop_on_fill_bar:
+    if fill_bar and not cfg.stop_on_fill_bar:
         hit_stop[0] = False
     if tgt is not None:
         through = cfg.target_through_ticks
         hit_target = (a["high"] >= tgt + through) if s > 0 else (a["low"] <= tgt - through)
-        if not cfg.target_on_fill_bar:
+        if fill_bar and not cfg.target_on_fill_bar:
             hit_target[0] = False
     else:
         hit_target = np.zeros(n, dtype=bool)
@@ -361,7 +375,8 @@ def simulate_exit(bars: pd.DataFrame, entry: EntryResult, *, direction: str,
         ref = cost.price(stp)
         # gap: a stop resting when the bar opened beyond it fills at the open.
         # On the fill bar the stop didn't exist yet at the open.
-        gapped = i > 0 and ((a["open"][i] < stp) if s > 0 else (a["open"][i] > stp))
+        gapped = (i > 0 or not fill_bar) and ((a["open"][i] < stp) if s > 0
+                                              else (a["open"][i] > stp))
         base = cost.price(a["open"][i]) if gapped else ref
         fill = Fill(STOP_MARKET, ts, -s, contracts, ref, ref,
                     base - s * cost.slippage(STOP_MARKET), cost.fees(contracts))
