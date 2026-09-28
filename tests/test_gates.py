@@ -543,6 +543,51 @@ def test_every_gate_is_evaluated_even_after_a_failure():
     assert r.plan is not None
 
 
+def test_the_built_context_kills_majors_on_the_buffered_close(monkeypatch):
+    """Regression for 3ccaf54, through the REAL GateContext.build.
+
+    The swing-death tests elsewhere call mark_swing_deaths() with the buffers
+    written into the test itself, so none of them covered the wiring inside
+    build(). Swapping the major buffer there for zeros (majors dying on a bare
+    close, the original bug) passed the whole unit suite on 2026-09-28; only
+    the real-data validator noticed. This builds a context from 1m bars with
+    the real MES configs and pins what build() hands mark_swing_deaths: the
+    S4 breakout buffer for majors, a bare close (zero) for minors."""
+    import numpy as np
+    import yaml
+    from signal_engine import timeframes
+
+    n = 3 * 1380                                     # three 23h sessions of 1m bars
+    ts = pd.date_range(pd.Timestamp("2026-03-02 17:00", tz="America/Chicago"),
+                       periods=n, freq="1min").tz_convert("UTC")
+    wave = 5000.0 + np.round(40 * np.sin(np.arange(n) / 90.0) * 4) / 4
+    one_m = pd.DataFrame({"ts": ts, "raw_symbol": "MESM6", "open": wave,
+                          "close": wave + 0.25, "volume": 100})
+    one_m["high"] = one_m[["open", "close"]].max(axis=1) + 0.5
+    one_m["low"] = one_m[["open", "close"]].min(axis=1) - 0.5
+    with open("config/symbols/MES.yaml", encoding="utf-8") as fh:
+        scfg = yaml.safe_load(fh)
+    from data.continuous_contract import trade_date
+    one_m["trade_date"] = trade_date(one_m["ts"], scfg["session"]["timezone"],
+                                     scfg["day_boundary"])
+
+    seen = {}
+    real = structure.mark_swing_deaths
+
+    def spy(pivots, close, *, major_buffer, minor_buffer):
+        seen.update(major=major_buffer.copy(), minor=minor_buffer.copy())
+        return real(pivots, close, major_buffer=major_buffer, minor_buffer=minor_buffer)
+
+    monkeypatch.setattr(gates.structure, "mark_swing_deaths", spy)
+    tfs = timeframes.build("MES", one_m, scfg, P)
+    c = GateContext.build(tfs, scfg)
+    want = triggers.breakout_buffer(c.entry[ATR], P)
+    assert seen, "build() never marked swing deaths"
+    pd.testing.assert_series_equal(seen["major"], want, check_names=False)
+    assert (seen["major"].dropna() > 0).all() and seen["major"].notna().any()
+    assert (seen["minor"] == 0).all()
+
+
 def test_neutral_policy_other_than_continuation_only_is_refused():
     p = params(trend__neutral_policy="gate_everything")
     tfs = TimeframeSet(symbol="MES", params=p, symbol_cfg={},
