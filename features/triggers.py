@@ -130,7 +130,21 @@ def breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
 
       up_close / down_close   STATE  -- is this bar closed beyond the level
       up_break / down_break   EVENT  -- the first close beyond after not being
-                                        beyond; this is what S8/S9 consume
+                                        beyond
+      up_start / down_start   EXCURSION -- the first close beyond since price
+                                        last closed back through the LEVEL;
+                                        this is what S8/S9/S10 consume
+
+A break can repeat inside one excursion: price closes beyond the buffer,
+drifts back inside it without closing back through the level, and breaks
+again. That is still one excursion, and exit spec Part 0 anchors the stop
+on "the extreme of the failed excursion", so S8/S9 key on its start. Keyed
+on every break, one excursion fired a failed breakout (or a retest) per
+break on the same bar, each later copy with a stop that ignored the
+excursion's first extreme (found on real MES data, 2026-09-28). The close
+that ends an excursion is the one S8 calls a failure: strictly back through
+the level. A series that opens mid-excursion (bar 0 already beyond) counts
+its first bars as that excursion, so a later re-break is not a start.
 
     The first bar can never be an event: with no prior bar there is no
     transition to observe, and treating a series that simply opens beyond a
@@ -146,6 +160,10 @@ def breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
     up_break = up_close & (prev_up == False)      # noqa: E712 -- NaN must not pass
     down_break = down_close & (prev_down == False)  # noqa: E712
 
+    close = bars["close"]
+    up_start = up_break.fillna(False) & _first_in_excursion(up_close, close < level)
+    down_start = down_break.fillna(False) & _first_in_excursion(down_close, close > level)
+
     pierced_up = (bars["high"] > level) & ~up_close
     pierced_down = (bars["low"] < level) & ~down_close
     return pd.DataFrame({
@@ -153,10 +171,19 @@ def breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
         "down_close": down_close,
         "up_break": up_break.fillna(False),
         "down_break": down_break.fillna(False),
+        "up_start": up_start,
+        "down_start": down_start,
         "wick_up_only": pierced_up.fillna(False),
         "wick_down_only": pierced_down.fillna(False),
         "buffer": buf,
     }, index=bars.index)
+
+
+def _first_in_excursion(beyond: pd.Series, back_through: pd.Series) -> pd.Series:
+    """True where `beyond` holds for the first time since `back_through` last
+    did (or since the series began)."""
+    run = back_through.fillna(False).astype(int).cumsum()
+    return beyond.astype(int).groupby(run).cumsum().eq(1) & beyond
 
 
 def in_test_zone(bars: pd.DataFrame, level: float, atr: pd.Series,
@@ -321,8 +348,9 @@ def failed_breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
     down_ok = only in (None, "down")
     # Plain arrays, and only the breakout bars visited: a per-bar DataFrame
     # column lookup made this the dominant cost of scanning every level.
-    up_brk = b["up_break"].to_numpy(dtype=bool)
-    dn_brk = b["down_break"].to_numpy(dtype=bool)
+    # one failed breakout per EXCURSION, anchored to its first close beyond
+    up_brk = b["up_start"].to_numpy(dtype=bool)
+    dn_brk = b["down_start"].to_numpy(dtype=bool)
 
     for i in map(int, np.flatnonzero(up_brk | dn_brk)):
         if up_ok and up_brk[i]:
@@ -383,8 +411,8 @@ def breakout_retests(bars: pd.DataFrame, level: float, atr: pd.Series,
     zone = in_test_zone(bars, level, atr, params).to_numpy(dtype=bool)
     rej = rejection_dir.to_numpy(dtype=object)
     close = bars["close"].to_numpy()
-    up_brk = b["up_break"].to_numpy(dtype=bool)
-    dn_brk = b["down_break"].to_numpy(dtype=bool)
+    up_brk = b["up_start"].to_numpy(dtype=bool)       # one per excursion, as S8
+    dn_brk = b["down_start"].to_numpy(dtype=bool)
     events: list[TriggerEvent] = []
 
     for i in map(int, np.flatnonzero(up_brk | dn_brk)):

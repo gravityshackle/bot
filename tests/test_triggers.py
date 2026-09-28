@@ -336,6 +336,64 @@ def test_return_outside_the_window_is_not_a_failed_breakout():
     assert out.empty
 
 
+def test_one_excursion_is_one_failed_breakout_even_if_it_re_breaks():
+    """Regression, found on real data (MES, 2026-09-28): price closed above
+    100.50 (level + buffer), dipped back inside the buffer without closing
+    below the level, broke out again, then closed back below. That is ONE
+    failed excursion, but each re-break was a new breakout event and each
+    fired its own failed breakout on the same bar, the later one with a stop
+    that ignored the excursion's first high. Part 0: the stop is the extreme
+    of the failed excursion, anchored to its first close beyond."""
+    df = mk([(99, 99.5, 98.5, 99.0),
+             (100, 101.5, 99.8, 101.0),     # first close beyond: the excursion starts
+             (101, 101.2, 100.2, 100.3),    # back inside the buffer, still above 100
+             (100.3, 101.4, 100.2, 101.0),  # re-breaks: same excursion
+             (101, 101.2, 99.0, 99.4)])     # closes back below: it failed
+    out = triggers.failed_breakouts(df, 100.0, flat_atr(df), P)
+    assert len(out) == 1, out
+    assert out.iloc[0]["meta"]["breakout_idx"] == 1
+    assert out.iloc[0]["meta"]["bars_to_fail"] == 3
+
+
+def test_an_excursion_longer_than_k_is_not_failed_by_a_late_re_break():
+    """K counts from the excursion's FIRST close beyond. Holding beyond for 4
+    bars and then re-breaking does not restart the clock."""
+    df = mk([(99, 99.5, 98.5, 99.0),
+             (100, 101.5, 99.8, 101.0),     # excursion starts
+             (101, 101.2, 100.2, 100.3),
+             (100.3, 100.6, 100.1, 100.4),
+             (100.4, 100.6, 100.1, 100.3),
+             (100.3, 101.4, 100.2, 101.0),  # re-break, 4 bars in
+             (101, 101.2, 99.0, 99.4)])     # back below after 5 bars (K=3)
+    assert triggers.failed_breakouts(df, 100.0, flat_atr(df), P).empty
+
+
+def test_a_series_opening_mid_excursion_has_no_start_to_anchor_on():
+    """The engine scans a level from the start of its live interval. If price
+    is already beyond it there, the excursion's first close beyond came before
+    the level was marked, so a later re-break is not a new excursion and there
+    is no failed breakout to anchor."""
+    df = mk([(101, 101.5, 100.8, 101.0),     # already beyond at bar 0
+             (101, 101.2, 100.2, 100.3),     # inside the buffer
+             (100.3, 101.4, 100.2, 101.0),   # re-break
+             (101, 101.2, 99.6, 99.8)])      # back below
+    assert triggers.failed_breakouts(df, 100.0, flat_atr(df), P).empty
+
+
+def test_two_real_excursions_are_two_failed_breakouts():
+    """A close back through the level ENDS an excursion, so the next close
+    beyond starts a new one. The fix must not merge these."""
+    # the failures close at 99.8: back below 100, but not a breakdown of it
+    # (100 - 0.50), which would add an opposite-direction event of its own
+    df = mk([(99, 99.5, 98.5, 99.0),
+             (100, 101.5, 99.8, 101.0),     # excursion 1
+             (101, 101.2, 99.6, 99.8),      # fails
+             (99.8, 101.5, 99.7, 101.0),    # excursion 2
+             (101, 101.2, 99.6, 99.8)])     # fails
+    out = triggers.failed_breakouts(df, 100.0, flat_atr(df), P)
+    assert [m["breakout_idx"] for m in out["meta"]] == [1, 3]
+
+
 def test_range_reclaim_shares_the_failed_breakout_math():
     df = mk([(99, 99.5, 98.5, 99.0),
              (100, 101.5, 99.8, 101.0),
@@ -387,6 +445,23 @@ def test_breakout_retest_fires_on_a_rejection_at_the_level():
     assert len(out) == 1
     assert out.iloc[0]["direction"] == triggers.LONG
     assert out.iloc[0]["meta"]["bars_to_retest"] == 2
+
+
+def test_one_excursion_is_one_breakout_retest_even_if_it_re_breaks():
+    """The S8 regression's twin: a re-break inside the same excursion found
+    the same retest bar again, as a second breakout/retest whose stop started
+    at the re-break instead of the breakout."""
+    df = mk([(99, 99.5, 98.5, 99.0),
+             (100, 102.0, 99.8, 101.5),           # breakout above 100 + 0.50
+             (101.5, 101.6, 100.3, 100.4),        # back inside the buffer, above 100
+             (100.4, 101.6, 100.3, 101.2),        # re-breaks: same excursion
+             (100.5, 102.0, 97.5, 101.8)])        # retest w/ bullish rejection
+    rej = triggers.rejection(df, feats_of(df), flat_atr(df), P)
+    assert rej.iloc[4] == triggers.LONG, "fixture must produce the rejection"
+    assert rej.iloc[2] != triggers.LONG and rej.iloc[3] != triggers.LONG
+    out = triggers.breakout_retests(df, 100.0, flat_atr(df), P, rej)
+    assert len(out) == 1, out
+    assert out.iloc[0]["meta"]["breakout_idx"] == 1
 
 
 def test_retest_invalidated_by_a_close_back_through_the_level():
