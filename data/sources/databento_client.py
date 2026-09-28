@@ -14,7 +14,7 @@ Two things this module refuses to do:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -51,6 +51,8 @@ class FetchResult:
     cost_usd: float
     from_cache: bool
     problems: list[str]
+    # conflicting definitions that were resolved, each with its evidence
+    resolutions: list[str] = field(default_factory=list)
 
 
 def _client(cfg: dict):
@@ -210,14 +212,55 @@ def _fetch_chunk(cfg: dict, symbol_cfg: dict, start, end
 
 
 def _merge_metas(into: dict[str, ContractMeta], more: dict[str, ContractMeta],
-                 symbol: str) -> None:
+                 conflicts: dict[str, list[pd.Timestamp]]) -> None:
+    """Merge one chunk's definitions over the earlier chunks'.
+
+    Chunks arrive oldest first, so a later value overwrites an earlier one --
+    the most recently published definition wins. Every disagreement is
+    recorded, and `_corroborate` then has to confirm it from the bars.
+    """
     for raw, m in more.items():
         have = into.get(raw)
         if have is not None and have.expiration != m.expiration:
-            raise SchemaError(
-                f"{symbol}: contract {raw} has two expirations across chunks "
-                f"({have.expiration} vs {m.expiration}); refusing to guess")
+            conflicts.setdefault(raw, [have.expiration]).append(m.expiration)
         into[raw] = m
+
+
+def _corroborate(conflicts: dict[str, list[pd.Timestamp]], metas: dict[str, ContractMeta],
+                 bars: pd.DataFrame, within: pd.Timedelta, symbol: str) -> list[str]:
+    """Accept each resolved conflict only if the bars agree, in both directions.
+
+    Found on real data: older definitions dated MBT H3/M3/U3 a week early
+    (CME's rule is the last Friday of the month), and MCL N2's expiry moved
+    forward for the Juneteenth holiday. In every case the newest definition
+    was right, and the contract traded until just before it. So the chosen
+    expiration must have NO bar after it and a last bar within `within`
+    before it. Anything the bars do not settle raises.
+    """
+    last = bars.groupby("raw_symbol")["ts"].max() if len(bars) else pd.Series(dtype=object)
+    notes = []
+    for raw, seen in conflicts.items():
+        chosen = metas[raw].expiration
+        others = ", ".join(f"{t:%Y-%m-%d %H:%M}" for t in seen if t != chosen)
+        if raw not in last.index:
+            raise SchemaError(
+                f"{symbol}: {raw} has conflicting expirations ({others} vs chosen "
+                f"{chosen:%Y-%m-%d %H:%M}) and no bars to judge by; refusing to guess")
+        lb = last[raw]
+        if lb > chosen:
+            raise SchemaError(
+                f"{symbol}: {raw} traded at {lb:%Y-%m-%d %H:%M}, after the most "
+                f"recent definition's expiration {chosen:%Y-%m-%d %H:%M} "
+                f"(older: {others}); refusing to guess")
+        if chosen - lb > within:
+            raise SchemaError(
+                f"{symbol}: {raw}'s last bar {lb:%Y-%m-%d %H:%M} is well before the "
+                f"most recent definition's expiration {chosen:%Y-%m-%d %H:%M} "
+                f"(older: {others}); the bars do not confirm it -- refusing to guess")
+        notes.append(f"{symbol}: {raw} expiration {chosen:%Y-%m-%d %H:%M} from the most "
+                     f"recent definition, over older {others}; confirmed by its last "
+                     f"bar {lb:%Y-%m-%d %H:%M}")
+    return notes
 
 
 def fetch_ohlcv(cfg: dict, symbol_cfg: dict, *, end=None, dry_run: bool = False,
@@ -283,16 +326,19 @@ def fetch_ohlcv(cfg: dict, symbol_cfg: dict, *, end=None, dry_run: bool = False,
     if not assemble:
         return FetchResult(pd.DataFrame(), {}, cost, not pending, problems)
 
-    frames, metas_all = [], {}
-    for bp, mp in paths:
+    frames, metas_all, conflicts = [], {}, {}
+    for bp, mp in paths:                       # oldest chunk first
         frames.append(pd.read_parquet(bp))
-        _merge_metas(metas_all, _metas_from_frame(pd.read_parquet(mp)), symbol)
+        _merge_metas(metas_all, _metas_from_frame(pd.read_parquet(mp)), conflicts)
     frames = [f for f in frames if len(f)]
     bars = (normalize(pd.concat(frames, ignore_index=True)) if frames
             else pd.DataFrame(columns=["ts", "raw_symbol", "open", "high", "low",
                                        "close", "volume"]))
+    within = pd.Timedelta(hours=float(
+        cfg.get("definitions", {}).get("conflict_last_bar_within_hours", 24)))
+    resolutions = _corroborate(conflicts, metas_all, bars, within, symbol)
     problems = validate(bars, tick_size=tick, symbol=symbol, strict=False) if len(bars) else []
-    return FetchResult(bars, metas_all, cost, not pending, problems)
+    return FetchResult(bars, metas_all, cost, not pending, problems, resolutions)
 
 
 def _metas_to_frame(metas: dict[str, ContractMeta]) -> pd.DataFrame:

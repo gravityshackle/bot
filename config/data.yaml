@@ -31,6 +31,15 @@ cost_control:
   # changed -- the estimate ran, stayed under the ceiling, and proceeded.
   require_explicit_confirmation: true
 
+definitions:
+  # When two chunks' contract definitions disagree on a contract's expiration,
+  # the most recently published one wins -- but only if the bars corroborate
+  # it both ways: no trading after it, and a last bar within this many hours
+  # before it. Otherwise the fetch refuses. Real cases (MBT H3/M3/U3 2023,
+  # MCL N2 2022) had last bars 1-18 minutes before the corrected expiration;
+  # 24h allows a holiday-shortened final session without being loose.
+  conflict_last_bar_within_hours: 24
+
 cache:
   dir: cache/databento
   format: parquet

@@ -220,20 +220,76 @@ def test_contract_years_come_from_expiration_across_the_window(tmp_path, fake):
     assert r.metas["MESH2"].year == 2022 and r.metas["MESH7"].year == 2027
 
 
-def test_conflicting_expirations_for_one_contract_raise(tmp_path, fake, monkeypatch):
-    fake["per_chunk"] = 1.0
-    real = FakeClient.get_range
-    seen = {"n": 0}
+# --------------------------------------------------------------------------
+# conflicting definitions across chunks (found on real MBT and MCL data)
+# --------------------------------------------------------------------------
 
-    def flaky(self, **kw):
-        if kw["schema"] == "definition":
-            seen["n"] += 1
-            exp = T("2023-03-17", tz=UTC) if seen["n"] == 1 else T("2023-03-24", tz=UTC)
-            return _Store(pd.DataFrame({"raw_symbol": ["MESH3"], "expiration": [exp]}))
-        return real(self, **kw)
-    monkeypatch.setattr(FakeClient, "get_range", flaky)
-    with pytest.raises(SchemaError, match="MESH3"):
-        fetch_ohlcv(cfg_for(tmp_path), mes(), confirm=True)
+class ScriptedClient:
+    """Two chunks (2025-09-12..2026-01-01, 2026-01-01..2026-09-12) that each
+    define MESH6, with per-chunk expirations; MESH6's bars end at `last_bar`."""
+
+    def __init__(self, exp_old, exp_new, last_bar, bar_symbol="MESH6"):
+        self.exps = {"2025-09-12": exp_old, "2026-01-01": exp_new}
+        self.last_bar, self.bar_symbol = last_bar, bar_symbol
+        self.timeseries = self
+
+    def get_range(self, *, dataset, symbols, stype_in, schema, start, end):
+        s, e = T(start), T(end)
+        if schema == "definition":
+            return _Store(pd.DataFrame({"raw_symbol": ["MESH6"],
+                                        "expiration": [self.exps[str(s.date())]]}))
+        ts = [s + pd.Timedelta("1h")]
+        if s <= self.last_bar < e:
+            ts.append(self.last_bar)
+        return _Store(pd.DataFrame({"symbol": self.bar_symbol, "open": 100.0,
+                                    "high": 100.5, "low": 99.75, "close": 100.25,
+                                    "volume": 10},
+                                   index=pd.DatetimeIndex(ts, name="ts_event")))
+
+
+def _two_chunks(tmp_path, fake, exp_old, exp_new, last_bar, **kw):
+    fake["per_chunk"] = 1.0
+    fake["client"] = ScriptedClient(T(exp_old, tz=UTC), T(exp_new, tz=UTC),
+                                    T(last_bar, tz=UTC), **kw)
+    return fetch_ohlcv(cfg_for(tmp_path, months=12), mes(), confirm=True)
+
+
+def test_the_most_recent_definition_wins_when_the_bars_agree(tmp_path, fake):
+    """MBT's real case: 2022's definitions dated MBTH3 a week early, 2023's
+    corrected it, and the contract traded until one minute before the later
+    date. The newer definition wins, and the resolution is reported."""
+    r = _two_chunks(tmp_path, fake, "2026-03-13 15:00", "2026-03-20 15:00",
+                    "2026-03-20 14:59")
+    assert r.metas["MESH6"].expiration == T("2026-03-20 15:00", tz=UTC)
+    assert any("MESH6" in x for x in r.resolutions)
+
+
+def test_a_correction_to_an_earlier_date_wins_too(tmp_path, fake):
+    """MCL's real case: MCLN2's expiry was brought forward by a holiday, so the
+    newer definition is the EARLIER date. Newest wins either way."""
+    r = _two_chunks(tmp_path, fake, "2026-03-23 18:30", "2026-03-20 18:30",
+                    "2026-03-20 18:24")
+    assert r.metas["MESH6"].expiration == T("2026-03-20 18:30", tz=UTC)
+
+
+def test_trading_after_the_chosen_expiration_raises(tmp_path, fake):
+    with pytest.raises(SchemaError, match="MESH6.*after"):
+        _two_chunks(tmp_path, fake, "2026-03-27 15:00", "2026-03-20 15:00",
+                    "2026-03-21 10:00")
+
+
+def test_bars_stopping_well_before_the_chosen_expiration_raise(tmp_path, fake):
+    """'Trading right up to it' is part of the corroboration: a last bar ten
+    days early does not confirm the chosen date."""
+    with pytest.raises(SchemaError, match="MESH6.*before"):
+        _two_chunks(tmp_path, fake, "2026-03-13 15:00", "2026-03-20 15:00",
+                    "2026-03-10 15:00")
+
+
+def test_a_conflict_with_no_bars_to_judge_by_raises(tmp_path, fake):
+    with pytest.raises(SchemaError, match="MESH6.*no bars"):
+        _two_chunks(tmp_path, fake, "2026-03-13 15:00", "2026-03-20 15:00",
+                    "2026-03-20 14:59", bar_symbol="MESM6")
 
 
 def test_assemble_false_caches_without_holding_the_window(tmp_path, fake):
