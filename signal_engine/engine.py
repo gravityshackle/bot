@@ -223,6 +223,10 @@ def level_dependent_candidates(ctx: GateContext) -> list[Candidate]:
     n, span = len(e), _span(p)
     mode = confirmation_signal.assert_single_mode(p)
     rej_full = triggers.rejection(e, e, e[ATR], p)
+    # the whole frame's closes and buffers, to carry an excursion that began
+    # before a level's window into it (triggers.excursion_before)
+    close_full = e["close"].to_numpy(dtype=float)
+    buf_full = triggers.breakout_buffer(e[ATR], p).to_numpy(dtype=float)
     out: list[Candidate] = []
 
     def sub(a, w):
@@ -232,10 +236,13 @@ def level_dependent_candidates(ctx: GateContext) -> list[Candidate]:
     for lv in marked_level_intervals(ctx):
         for a, b, w in _windows(lv, n, span):
             s, atr = sub(a, w)
-            found = triggers.failed_breakouts(s, lv.price, atr, p).to_dict("records")
+            prior = triggers.excursion_before(close_full, buf_full, lv.price, a)
+            found = triggers.failed_breakouts(s, lv.price, atr, p,
+                                              prior=prior).to_dict("records")
             if mode == "buffer":
                 rej = rej_full.iloc[a:w + 1].reset_index(drop=True)
-                found += triggers.breakout_retests(s, lv.price, atr, p, rej).to_dict("records")
+                found += triggers.breakout_retests(s, lv.price, atr, p, rej,
+                                                   prior=prior).to_dict("records")
             for ev in found:
                 c = gates.from_event(_shift_event(ev, a), level_name=lv.name)
                 if _keep(c, a, b):

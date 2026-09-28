@@ -116,7 +116,7 @@ def trend_bias(htf: pd.DataFrame, params: Params) -> pd.Series:
 # --------------------------------------------------------------------------
 
 def breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
-              params: Params) -> pd.DataFrame:
+              params: Params, prior: tuple[bool, bool] = (False, False)) -> pd.DataFrame:
     """Classify each bar against one level, as both STATE and EVENT.
 
     S4 reads literally as "a close beyond the level by a buffer", which as a
@@ -145,6 +145,9 @@ excursion's first extreme (found on real MES data, 2026-09-28). The close
 that ends an excursion is the one S8 calls a failure: strictly back through
 the level. A series that opens mid-excursion (bar 0 already beyond) counts
 its first bars as that excursion, so a later re-break is not a start.
+`prior` = (up, down) says whether an excursion was already running on the
+bar before `bars` begins (`excursion_before`): a window can open back inside
+the buffer mid-excursion, with nothing in it to show the excursion began.
 
     The first bar can never be an event: with no prior bar there is no
     transition to observe, and treating a series that simply opens beyond a
@@ -161,8 +164,9 @@ its first bars as that excursion, so a later re-break is not a start.
     down_break = down_close & (prev_down == False)  # noqa: E712
 
     close = bars["close"]
-    up_start = up_break.fillna(False) & _first_in_excursion(up_close, close < level)
-    down_start = down_break.fillna(False) & _first_in_excursion(down_close, close > level)
+    up_start = up_break.fillna(False) & _first_in_excursion(up_close, close < level, prior[0])
+    down_start = down_break.fillna(False) & _first_in_excursion(down_close, close > level,
+                                                                prior[1])
 
     pierced_up = (bars["high"] > level) & ~up_close
     pierced_down = (bars["low"] < level) & ~down_close
@@ -179,11 +183,43 @@ its first bars as that excursion, so a later re-break is not a start.
     }, index=bars.index)
 
 
-def _first_in_excursion(beyond: pd.Series, back_through: pd.Series) -> pd.Series:
+def _first_in_excursion(beyond: pd.Series, back_through: pd.Series,
+                        running: bool = False) -> pd.Series:
     """True where `beyond` holds for the first time since `back_through` last
-    did (or since the series began)."""
+    did (or since the series began). `running`: an excursion was already
+    under way before the first bar, so until the first `back_through` nothing
+    is a first."""
     run = back_through.fillna(False).astype(int).cumsum()
-    return beyond.astype(int).groupby(run).cumsum().eq(1) & beyond
+    count = beyond.astype(int).groupby(run).cumsum()
+    if running:
+        count = count + (run == 0).astype(int)
+    return count.eq(1) & beyond
+
+
+def excursion_before(close: np.ndarray, buffer: np.ndarray, level: float,
+                     pos: int) -> tuple[bool, bool]:
+    """(up, down): is an excursion beyond `level` under way on bar pos - 1?
+
+    Scans back from pos - 1 to the nearest bar that settles it: a close
+    beyond by the buffer (under way) or a close back through the level
+    (ended). Usually a few bars. Both sides are scanned separately.
+    """
+    up = down = None
+    for i in range(pos - 1, -1, -1):
+        c, b = close[i], buffer[i]
+        if up is None:
+            if c < level:
+                up = False
+            elif c > level + b:
+                up = True
+        if down is None:
+            if c > level:
+                down = False
+            elif c < level - b:
+                down = True
+        if up is not None and down is not None:
+            break
+    return bool(up), bool(down)
 
 
 def in_test_zone(bars: pd.DataFrame, level: float, atr: pd.Series,
@@ -324,8 +360,8 @@ def three_tail(bars: pd.DataFrame, feats: pd.DataFrame, atr: pd.Series,
 
 def failed_breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
                      params: Params, *, window_key="failed_breakout.window_bars",
-                     kind="failed_breakout", only: str | None = None
-                     ) -> pd.DataFrame:
+                     kind="failed_breakout", only: str | None = None,
+                     prior: tuple[bool, bool] = (False, False)) -> pd.DataFrame:
     """Close beyond a level, then back through it within K bars (S8).
 
     The resulting trade is the OPPOSITE direction to the breakout: a failed
@@ -341,7 +377,7 @@ def failed_breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
     if only not in (None, "up", "down"):
         raise ValueError(f"only must be None|'up'|'down', got {only!r}")
     k = int(params.get(window_key))
-    b = breakouts(bars, level, atr, params)
+    b = breakouts(bars, level, atr, params, prior)
     events: list[TriggerEvent] = []
     close = bars["close"].to_numpy()
     up_ok = only in (None, "up")
@@ -399,7 +435,8 @@ def range_reclaims(bars: pd.DataFrame, edge: float, atr: pd.Series,
 # --------------------------------------------------------------------------
 
 def breakout_retests(bars: pd.DataFrame, level: float, atr: pd.Series,
-                     params: Params, rejection_dir: pd.Series) -> pd.DataFrame:
+                     params: Params, rejection_dir: pd.Series,
+                     prior: tuple[bool, bool] = (False, False)) -> pd.DataFrame:
     """Confirmed breakout, pullback into the test zone, rejection there (S9).
 
     Invalidated if price closes back through the level in the failure
@@ -407,7 +444,7 @@ def breakout_retests(bars: pd.DataFrame, level: float, atr: pd.Series,
     the two must not both fire on the same sequence.
     """
     k_max = int(params.get("breakout_retest.max_bars_to_retest"))
-    b = breakouts(bars, level, atr, params)
+    b = breakouts(bars, level, atr, params, prior)
     zone = in_test_zone(bars, level, atr, params).to_numpy(dtype=bool)
     rej = rejection_dir.to_numpy(dtype=object)
     close = bars["close"].to_numpy()

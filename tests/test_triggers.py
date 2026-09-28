@@ -380,6 +380,34 @@ def test_a_series_opening_mid_excursion_has_no_start_to_anchor_on():
     assert triggers.failed_breakouts(df, 100.0, flat_atr(df), P).empty
 
 
+def test_an_excursion_already_running_before_the_window_is_not_restarted():
+    """Found by the level validator on real data (MET 16, MES 1): the engine
+    scans a level window by window. A window whose first bar is back inside
+    the buffer, after an excursion that began BEFORE the window, saw the
+    next re-break as a new start. `prior` carries the state in."""
+    df = mk([(101, 101.2, 100.2, 100.3),     # inside the buffer: no state visible
+             (100.3, 101.4, 100.2, 101.0),   # re-break
+             (101, 101.2, 99.6, 99.8)])      # back below
+    assert len(triggers.failed_breakouts(df, 100.0, flat_atr(df), P)) == 1
+    assert triggers.failed_breakouts(df, 100.0, flat_atr(df), P,
+                                     prior=(True, False)).empty
+    rej = triggers.rejection(df, feats_of(df), flat_atr(df), P)
+    assert triggers.breakout_retests(df, 100.0, flat_atr(df), P, rej,
+                                     prior=(True, False)).empty
+
+
+def test_excursion_before_scans_back_to_the_last_close_through_the_level():
+    # bar 0 is below 100 but inside the buffer (not a breakdown); break at 1
+    closes = np.array([99.8, 101.0, 100.3, 100.2, 100.4])
+    buf = np.full(5, 0.5)
+    assert triggers.excursion_before(closes, buf, 100.0, 5) == (True, False)
+    assert triggers.excursion_before(closes, buf, 100.0, 1) == (False, False)
+    back = np.array([99.0, 101.0, 99.8, 100.3])             # closed back below at 2
+    assert triggers.excursion_before(back, np.full(4, 0.5), 100.0, 4) == (False, False)
+    down = np.array([101.0, 99.0, 99.7])                    # breakdown at 1
+    assert triggers.excursion_before(down, np.full(3, 0.5), 100.0, 3) == (False, True)
+
+
 def test_two_real_excursions_are_two_failed_breakouts():
     """A close back through the level ENDS an excursion, so the next close
     beyond starts a new one. The fix must not merge these."""

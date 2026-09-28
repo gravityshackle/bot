@@ -23,7 +23,11 @@ level is scanned from the bar it becomes marked -- the same semantics as the
 engine, stated deliberately: an alert armed before a level existed is not
 about that level.
 
-Usage: python scripts/validate_level_triggers.py SYM [SYM ...]
+S10 keeps the transition rule: a range edge is the rolling extreme of the
+bars behind it, so no close can sit beyond it by the buffer before the
+escape, and a re-break inside one edge value cannot happen.
+
+Usage: python scripts/validate_level_triggers.py [--days N] SYM [SYM ...]
 """
 from __future__ import annotations
 
@@ -93,6 +97,28 @@ class Rules:
         dn[1:] = dn_state[1:] & ~dn_state[:-1]
         return up, dn
 
+    def excursion_starts(self, level):
+        """S8/S9 key on the EXCURSION, not every break: the first close beyond
+        (by the buffer) since price last closed back through the level itself.
+        Restated as a plain walk over the WHOLE series, so an excursion that
+        began before a level's live interval is still seen as begun."""
+        c, b = self.c, self.buf
+        up_t, dn_t = self.breakouts(level)
+        up = np.zeros(self.n, bool); dn = np.zeros(self.n, bool)
+        in_up = in_dn = False
+        for i in range(self.n):
+            if c[i] < level:
+                in_up = False
+            if c[i] > level:
+                in_dn = False
+            if c[i] > level + b[i]:
+                up[i] = up_t[i] and not in_up
+                in_up = True
+            if c[i] < level - b[i]:
+                dn[i] = dn_t[i] and not in_dn
+                in_dn = True
+        return up, dn
+
     # -- when each S1-S4 level is marked, restated ---------------------------
     def marked(self) -> dict[int, np.ndarray]:
         e, ctx, n = self.e, self.ctx, self.n
@@ -151,7 +177,7 @@ def expected_s8_s9(R: Rules, marked, with_retest: bool):
     s8, s9 = set(), set()
     for k, live in marked.items():
         lv = R.price[k]
-        up, dn = R.breakouts(lv)
+        up, dn = R.excursion_starts(lv)
         for b in np.flatnonzero(up | dn):
             if b < 1 or not live[b - 1]:
                 continue
@@ -237,11 +263,14 @@ def forward(R: Rules, marked, cands):
         if cd.kind in ("failed_breakout", "breakout_retest"):
             b = start
             up, dn = R.breakouts(lv)
+            su, sd = R.excursion_starts(lv)
             if not (b >= 1 and k in marked and marked[k][b - 1]):
                 f(cd.kind, "level marked on bar before the breakout")
             brk_up = cd.direction == ("short" if cd.kind == "failed_breakout" else "long")
             if not (up[b] if brk_up else dn[b]):
                 f(cd.kind, "breakout is a buffered transition")
+            if not (su[b] if brk_up else sd[b]):
+                f(cd.kind, "breakout is the excursion's first close beyond")
             if cd.kind == "failed_breakout":
                 if not (i - b <= R.k_fail and ((R.c[i] < lv) if brk_up else (R.c[i] > lv))):
                     f(cd.kind, "closes back through within K")
@@ -300,8 +329,11 @@ def run_mode(symbol, series, scfg, mode):
     return ctx, cands
 
 
-def validate(symbol: str) -> dict:
+def validate(symbol: str, days: int | None = None) -> dict:
     series, scfg, _ = build_continuous(symbol, load_data_config())
+    if days is not None:                 # the last N days only, for a quicker pass
+        b = series.bars
+        series.bars = b[b["ts"] >= b["ts"].max() - pd.Timedelta(days=days)].reset_index(drop=True)
     report = {}
     for mode in ("buffer", "confirmation_signal"):
         ctx, cands = run_mode(symbol, series, scfg, mode)
@@ -330,8 +362,13 @@ def validate(symbol: str) -> dict:
 
 def main(argv):
     bad = 0
+    days = None
+    if "--days" in argv:
+        i = argv.index("--days")
+        days = int(argv[i + 1])
+        argv = argv[:i] + argv[i + 2:]
     for sym in argv:
-        rep = validate(sym)
+        rep = validate(sym, days)
         if rep["_price_conflicts"]:
             bad += 1
             print(f"{sym}: {rep['_price_conflicts']} level(s) where two sources on one "
