@@ -49,6 +49,7 @@ def main(sym: str) -> int:
 
     # ---- per chunk ----------------------------------------------------------
     metas_seen: dict = {}
+    conflicts: dict = {}                    # raw -> [older expirations...]
     for a, b in year_chunks(start, end):
         bars = pd.read_parquet(_cache_path(cfg, sym, a, b, "ohlcv1m"))
         metas = _metas_from_frame(pd.read_parquet(_cache_path(cfg, sym, a, b, "meta")))
@@ -56,9 +57,9 @@ def main(sym: str) -> int:
         inside = bool(((bars["ts"] >= a) & (bars["ts"] < b)).all()) if len(bars) else True
         if probs or not inside:
             bad.append(f"chunk {a:%Y}: {len(probs)} problems, inside window {inside} {probs[:2]}")
-        for raw, m in metas.items():
+        for raw, m in metas.items():         # chunks oldest first: newest wins
             if raw in metas_seen and metas_seen[raw].expiration != m.expiration:
-                bad.append(f"{raw}: expiration differs across chunks")
+                conflicts.setdefault(raw, []).append(metas_seen[raw].expiration)
             metas_seen[raw] = m
 
     # ---- contract ordering -----------------------------------------------------
@@ -73,6 +74,21 @@ def main(sym: str) -> int:
 
     # ---- continuous series ------------------------------------------------------
     series, scfg, all_bars = build_continuous(sym, cfg)
+
+    # ---- conflicting definitions: re-check the loader's rule from raw bars --
+    within = pd.Timedelta(hours=float(cfg["definitions"]["conflict_last_bar_within_hours"]))
+    last_bar = all_bars.groupby("raw_symbol")["ts"].max()
+    conflict_notes = []
+    for raw, older in conflicts.items():
+        chosen = metas_seen[raw].expiration
+        lb = last_bar.get(raw)
+        ok = lb is not None and lb <= chosen and chosen - lb <= within
+        conflict_notes.append(f"{raw}: newest {chosen:%Y-%m-%d %H:%M} over "
+                              f"{', '.join(f'{t:%Y-%m-%d}' for t in older)}; last bar "
+                              f"{lb:%Y-%m-%d %H:%M} -> {'confirmed' if ok else 'NOT CONFIRMED'}"
+                              if lb is not None else f"{raw}: no bars -> NOT CONFIRMED")
+        if not ok:
+            bad.append(f"{raw}: conflicting definition not confirmed by bars")
     s = series.bars
     rm = series.roll_map
     reasons = Counter(str(r).split("(")[0] for r in rm["reason"])
@@ -99,6 +115,8 @@ def main(sym: str) -> int:
           f"{order_ok}", flush=True)
     print(f"   rolls {len(rm)}: {dict(reasons)} | seam offsets verified {offsets_ok}/{len(rm)} | "
           f"minority-contract sessions {minority} (~{minority / max(1, len(rm)):.1f} per roll)", flush=True)
+    for note in conflict_notes:
+        print(f"   definition conflict: {note}", flush=True)
     for w in cov[:3]:
         print(f"   coverage: {w}", flush=True)
     for j in jumps.itertuples():
