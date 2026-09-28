@@ -142,7 +142,7 @@ same discipline as Phases 1–3.
 | **4.1** | `execution/simulated_execution.py`: limit entry, time-in-force, invalidation before fill, trade-through fills on the 1-minute path, stop/target fills, costs | fill simulator, unit-tested on hand-built paths | C2 |
 | **4.2** | Exit state machine: breakeven at 1R, causal trailing | trade lifecycle | exit spec Part 3 |
 | **4.3** | Setup-level study harness; per-trade records with the full score breakdown | one row per setup, outcome plus components | C3, C4 |
-| **4.4** | **A4 first:** reward/risk quality and RR band vs realized win rate, expectancy and R distribution, in-sample and out-of-sample separately | a yes/no answer on whether the component rewards better or worse trades | A4 |
+| **4.4** | **A4 first**, per instrument before any pooling (see A4 in phase4_questions.md; SIL flagged low-sample/directional-only): reward/risk quality and RR band vs realized win rate, expectancy and R distribution, in-sample and out-of-sample separately | a yes/no answer on whether the component rewards better or worse trades | A4 |
 | 4.5 | Re-plan the rest of Phase 4's order from 4.4's answer. Then A1 (three-tail), A5, A6, and the weight refit (A2) with the score floor (A3) | revised tuning order | A1–A3, A5, A6 |
 | 4.6 | `risk_engine/controls.py` and `sizing.py`: the Part 4 state machine, plugged into gate 6; `backtest/engine.py` portfolio mode | account-level results | gate 6, Part 4 |
 | 4.7 | Performance work (vectorise the gate path), then walk-forward over section B, plus A8–A11 | tuned per-instrument parameters | B, C5, C6, A8–A11 |
