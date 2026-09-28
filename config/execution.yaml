@@ -1,0 +1,50 @@
+# Fill-model rules for the Phase 4 simulator (execution/simulated_execution.py).
+#
+# Decided 2026-09-26 (docs/phase4_plan.md sections 2 and 5). Costs and
+# slippage sizes live in config/costs.yaml; tick size and point value in each
+# config/symbols/<SYM>.yaml. Every ambiguous case resolves to the adverse
+# outcome: queue position and intrabar order are unknowable from OHLC bars.
+
+entry:
+  # Exit spec Part 2: the limit stays live for this many ENTRY-timeframe bars
+  # after the decision bar closes (spec range 3-5; 3 is the conservative end).
+  # Counted in bars that exist, not wall-clock time, so a data gap doesn't
+  # shorten the window.
+  k_entry_expire_bars: 3
+  # A limit fills only when a later bar trades THROUGH it by this many ticks.
+  # A touch is not a fill: queue position is unknowable.
+  trade_through_ticks: 1
+
+targets:
+  # The resting target limit uses the same trade-through rule.
+  trade_through_ticks: 1
+
+fills:
+  # Limit fills get their limit price, never the better price a gap
+  # would give.
+  limit_price_improvement: false
+  # A stop-market triggers when price TRADES AT the stop (touch). If a bar
+  # opens beyond a stop that was already resting, it fills at that open.
+  stop_trigger: touch
+  # One 1-minute bar reaching both the stop and the target: assume the stop
+  # came first.
+  same_bar_stop_and_target: stop
+  # On the bar that fills the entry, the stop can hit (the price path passes
+  # the entry on its way to the stop); the target cannot, since it may have
+  # traded before the fill.
+  fill_bar_exits: [stop]
+
+rounding:
+  # Order prices have to sit on the tick grid. The Part 0 stop (pattern
+  # extreme -/+ ATR buffer) and the 2R fallback target generally don't.
+  # Stops round away from entry: never tighter than the Part 0 rule.
+  # Targets round toward entry: never promise reward the level doesn't give.
+  # Entry prices must already be on the grid; one that isn't raises.
+  stop: away_from_entry
+  target: toward_entry
+
+day_boundary:
+  # Positions close at MARKET on the last bar of their trade date (each
+  # instrument's own day_boundary). Pending entries are cancelled there too.
+  # Carrying overnight is a later variant, not the default.
+  policy: flatten
