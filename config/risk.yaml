@@ -1,0 +1,19 @@
+# Risk controls: exit spec Part 1 (sizing). Part 4's daily state machine
+# (2 trades/day, stop after 2 losses, -$300 breaker, +$100 target, one open
+# position, the index correlation group) joins this file in Phase 4.6.
+#
+# Dollar figures are the spec's real numbers for the $5,000 account, not
+# placeholders. They are deliberately fixed, not auto-scaling (Part 1 design
+# note): revisit them by hand.
+
+account:
+  starting_equity: 5000.00
+  # The setup-level study (4.3) sizes every setup against this, with no
+  # compounding: setups are simulated independently, so there's no running
+  # equity to size from. The portfolio backtest (4.6) carries real equity.
+
+sizing:
+  risk_pct: 0.01                  # risk_dollars = min(equity x risk_pct, max_risk_per_trade)
+  max_risk_per_trade: 50.00
+  max_contracts: 1                # no partials in v1
+  # A setup that sizes to 0 contracts is DISCARDED, never rounded up to 1.
