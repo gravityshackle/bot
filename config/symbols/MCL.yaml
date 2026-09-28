@@ -22,7 +22,13 @@ contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]
 rollover:
   rule: volume_crossover
   confirm_days: 1              # tuned on 3mo real data (Phase 1 sweep)
-  calendar_backstop_days: 2    # last resort only -- must not preempt the crossover
+  # DECIDED 2026-09-27 (open_questions #18, phase4_questions A11): roll ONE
+  # day before expiry, as MET and MBT do. On the 5-year pull, volume takes the
+  # lead in the next contract only on the last session before expiry (all 60
+  # rolls). The 2-day backstop forced 43 rolls while the expiring contract
+  # still held a median 66% of volume. 1 day: minority sessions 51 -> 18.
+  # Pinned by tests/test_continuous_contract.py.
+  calendar_backstop_days: 1
   candidate: highest_volume
 
 session:

@@ -454,7 +454,19 @@ def test_met_and_mbt_roll_one_day_before_expiry():
         assert _rollover(sym)["calendar_backstop_days"] == 1, sym
 
 
+def test_mcl_rolls_one_day_before_expiry():
+    """Decided 2026-09-27, on the full 5-year pull: MCL has the same late
+    migration as MET/MBT. The incoming contract takes the volume lead only
+    on the last session before expiry, in all 60 rolls. On the 43 rolls the
+    old 2-day backstop forced, the expiring contract still held a median 66%
+    of volume (34 of them above 50%). A 1-day backstop cut the minority-
+    contract sessions from 51 to 18."""
+    assert _rollover("MCL")["calendar_backstop_days"] == 1
+
+
 def test_the_other_five_keep_their_tuned_backstops():
-    """The decision is scoped to MET and MBT; the others were tuned in Phase 1."""
-    expected = {"MES": 3, "MNQ": 3, "MYM": 3, "MCL": 2, "MGC": 2, "SIL": 2}
+    """The 1-day decision covers MET, MBT and MCL; the five others were tuned
+    in Phase 1. MNQ's backstop rolls were checked on the 5-year pull and are
+    timely (expiring contract 19-36% on roll day), so it keeps 3."""
+    expected = {"MES": 3, "MNQ": 3, "MYM": 3, "MGC": 2, "SIL": 2}
     assert {s: _rollover(s)["calendar_backstop_days"] for s in expected} == expected
