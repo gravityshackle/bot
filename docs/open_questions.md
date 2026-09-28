@@ -618,7 +618,7 @@ something (see docs/phase4_questions.md).
 
 ---
 
-## 18. DECIDED: MET and MBT roll one day before expiry
+## 18. DECIDED: MET, MBT and MCL roll one day before expiry
 
 **Config:** `config/symbols/MET.yaml > rollover` (`rule: volume_crossover`,
 `confirm_days: 2`, `calendar_backstop_days: 2`)
@@ -674,3 +674,21 @@ reintroduce the smoothing "fix" or change the backstop.
 Measured after the change, same 3-month window: MBT's minority-contract
 sessions fell from 6 to 3 (one per roll); MET's from 6 to 4 (one per roll,
 plus the Sunday 07-26 weekend blip).
+
+**Extended to MCL (2026-09-27), on the full 5-year pull.** The same check,
+run per roll on every instrument, found MCL has the same late migration: the
+incoming contract takes the volume lead only on the last session before
+expiry, in all 60 rolls. The 2-day backstop forced 43 of those rolls while
+the expiring contract still held a median 66% of roll-day volume (34 above
+50%, up to 79%); the 17 crossover rolls were clean (median 4%). At a 1-day
+backstop: 42 backstop and 18 crossover rolls, and minority-contract sessions
+fall from 51 to 18. `validate_pull MCL` is clean, 60/60 seams verified.
+Pinned in `config/symbols/MCL.yaml` and `tests/test_continuous_contract.py`
+(commit `ecabf06`).
+
+**MNQ checked and left at 3.** Its backstop rolls since December 2024 look
+similar by label only. The switch is always a clean single lead change, and
+it moved from 4 sessions before expiry to 3, which is when the 3-day backstop
+fires. The expiring contract holds just 19-36% on those roll days, so the
+rolls are timely and the label is cosmetic. MES and MYM each have one backstop
+roll, the June 2026 window edge. MGC and SIL keep 2.
