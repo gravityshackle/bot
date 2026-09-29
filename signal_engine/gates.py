@@ -38,6 +38,7 @@ trigger bar itself. For S19 it is the entry bar its 10min bar landed on
 """
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass, field
 from typing import Callable
@@ -164,6 +165,49 @@ class GateContext:
     @property
     def params(self):
         return self.tfs.params
+
+    # -- read-only caches, built on first use ----------------------------------
+    # The gates ask "which major swings are live at bar i" and "which marked
+    # levels exist at bar i" for every candidate. Answering from DataFrames
+    # re-filtered per call dominated gate time, so both read arrays built once.
+    # They assume entry/pivots/gaps are not mutated after the first gate runs.
+
+    @functools.cached_property
+    def _swing_arrays(self):
+        pv = self.pivots
+        if structure.DEAD_IDX not in pv.columns:
+            raise ValueError("pivots carry no dead_idx; run mark_swing_deaths() "
+                             "first, or 'live' silently means every swing ever")
+        if pv.empty:
+            z = np.zeros(0)
+            return z, z.astype(bool), z, z.astype(object), z
+        return (pv["confirmed_idx"].to_numpy(dtype=float),
+                pv["is_major"].fillna(False).astype(bool).to_numpy(),
+                pv[structure.DEAD_IDX].astype("Float64").to_numpy(dtype=float,
+                                                                  na_value=np.nan),
+                pv["kind"].to_numpy(dtype=object),
+                pv["price"].to_numpy(dtype=float))
+
+    def live_major_swings(self, i: int) -> tuple[np.ndarray, np.ndarray]:
+        """(kinds, prices) of `structure.live_major_swings(pivots, i)`, in the
+        same row order: confirmed by i, major, and not yet dead at i."""
+        conf, major, dead, kind, price = self._swing_arrays
+        live = (conf <= i) & major & (np.isnan(dead) | (dead > i))
+        return kind[live], price[live]
+
+    @functools.cached_property
+    def _level_columns(self):
+        e = self.entry
+        return [(name, e[col].to_numpy(dtype=float, na_value=np.nan))
+                for name, col in MARKED_COLUMNS if col in e.columns]
+
+    @functools.cached_property
+    def _gap_arrays(self):
+        g = self.gaps
+        if g.empty:
+            return None
+        return (g, g["active_from"], pd.to_datetime(g["filled_date"]),
+                self.entry["ts"], self.entry["trade_date"].to_numpy(dtype=object))
 
     @classmethod
     def build(cls, tfs: TimeframeSet, symbol_cfg: dict,
@@ -312,6 +356,14 @@ def level_free_candidates(tfs: TimeframeSet) -> list[Candidate]:
 # marked levels (S2-S6, plus confirmed major swings)
 # ==========================================================================
 
+MARKED_COLUMNS = (("prior day high", levels.PRIOR_DAY_HIGH),
+                  ("prior day low", levels.PRIOR_DAY_LOW),
+                  ("prior week high", levels.PRIOR_WEEK_HIGH),
+                  ("prior week low", levels.PRIOR_WEEK_LOW),
+                  ("range high", levels.RANGE_HIGH),
+                  ("range low", levels.RANGE_LOW))
+
+
 def marked_levels(ctx: GateContext, i: int) -> list[tuple[str, float]]:
     """Every marked level knowable at entry bar `i`.
 
@@ -324,29 +376,23 @@ def marked_levels(ctx: GateContext, i: int) -> list[tuple[str, float]]:
     yet closed beyond. Counting every swing in the history left ~470 levels
     live at a typical bar, which made gate 2 pass almost anything.
     """
-    row = ctx.entry.iloc[i]
     out: list[tuple[str, float]] = []
-    for name, col in (("prior day high", levels.PRIOR_DAY_HIGH),
-                      ("prior day low", levels.PRIOR_DAY_LOW),
-                      ("prior week high", levels.PRIOR_WEEK_HIGH),
-                      ("prior week low", levels.PRIOR_WEEK_LOW),
-                      ("range high", levels.RANGE_HIGH),
-                      ("range low", levels.RANGE_LOW)):
-        if col in row.index and pd.notna(row[col]):
-            out.append((name, float(row[col])))
+    for name, values in ctx._level_columns:
+        v = values[i]
+        if not np.isnan(v):
+            out.append((name, float(v)))
 
-    if not ctx.gaps.empty:
-        ts, day = row["ts"], pd.Timestamp(row["trade_date"])
-        g = ctx.gaps
-        filled = pd.to_datetime(g["filled_date"])
-        live = ((g["active_from"] <= ts)
+    gaps = ctx._gap_arrays
+    if gaps is not None:
+        g, active_from, filled, ts_col, days = gaps
+        ts, day = ts_col.iloc[i], pd.Timestamp(days[i])
+        live = ((active_from <= ts)
                 & (filled.isna() | (filled >= day)))
         for z in g[live.fillna(False)].itertuples():
             out += [("gap edge", float(z.zone_low)),
                     ("gap edge", float(z.zone_high))]
 
-    sw = structure.live_major_swings(ctx.pivots, i)
-    for kind, price in zip(sw["kind"], sw["price"]):
+    for kind, price in zip(*ctx.live_major_swings(i)):
         out.append((f"major swing {kind}", float(price)))
     return out
 
@@ -520,21 +566,22 @@ def plan_trade(c: Candidate, ctx: GateContext) -> TradePlan | None:
     # Only LIVE major swings (spec S1). A level price has already closed
     # through is not a target. It also means a live high is always above the
     # last close and a live low below it, so no swing low is ever "overhead".
-    sw = structure.live_major_swings(ctx.pivots, c.decision_idx)
-    beyond = sw[sw["price"] > entry] if long_ else sw[sw["price"] < entry]
-    if beyond.empty:
+    kinds, prices = ctx.live_major_swings(c.decision_idx)
+    side = prices > entry if long_ else prices < entry
+    if not side.any():
         target = entry + min_rr * risk if long_ else entry - min_rr * risk
         return TradePlan(entry, stop, target, risk, min_rr, invalid,
                          "2R_fallback")
 
-    nearest = beyond.loc[(beyond["price"] - entry).abs().idxmin()]
-    target = float(nearest["price"])
+    kinds, prices = kinds[side], prices[side]
+    k = int(np.argmin(np.abs(prices - entry)))        # first nearest, as idxmin
+    target = float(prices[k])
     reward = abs(target - entry)
     rr = reward / risk
     floor = min_rr * risk
     ratio = max(reward, floor) / min(reward, floor)
     return TradePlan(entry, stop, target, risk, rr, invalid, "major_level",
-                     f"major swing {nearest['kind']}", ratio,
+                     f"major swing {kinds[k]}", ratio,
                      ratio > float(p.get("targets.disagreement_flag_ratio")))
 
 

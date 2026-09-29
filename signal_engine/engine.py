@@ -41,7 +41,7 @@ import numpy as np
 import pandas as pd
 
 from features import confirmation_signal, levels, structure, triggers
-from features.schema import ATR, VOLUME_EXPANDED, tick_size
+from features.schema import ATR, BODY_RATIO, VOLUME_EXPANDED, tick_size
 from signal_engine import gates, scoring
 from signal_engine.gates import Candidate, GateContext, GateReport
 from signal_engine.timeframes import TimeframeSet
@@ -203,6 +203,12 @@ def _windows(lv: LiveLevel, n: int, span: int):
         yield a, b, min(b + 1 + span, n - 1)
 
 
+def _event_dict(ev: "triggers.TriggerEvent") -> dict:
+    """The record `DataFrame.to_dict("records")` gave for one event row."""
+    return {"idx": ev.idx, "ts": ev.ts, "kind": ev.kind, "direction": ev.direction,
+            "level": ev.level, "price": ev.price, "meta": ev.meta}
+
+
 def _shift_event(ev: dict, off: int) -> dict:
     ev = dict(ev)
     ev["idx"] = int(ev["idx"]) + off
@@ -222,33 +228,47 @@ def level_dependent_candidates(ctx: GateContext) -> list[Candidate]:
     e, p = ctx.entry, ctx.params
     n, span = len(e), _span(p)
     mode = confirmation_signal.assert_single_mode(p)
-    rej_full = triggers.rejection(e, e, e[ATR], p)
-    # the whole frame's closes and buffers, to carry an excursion that began
-    # before a level's window into it (triggers.excursion_before)
+    # Whole-frame arrays, built once. Each level window is a NumPy VIEW of
+    # these handed to the detector cores: slicing the wide entry frame and
+    # round-tripping every event through a DataFrame per window was most of
+    # the engine's runtime. The public triggers.* functions wrap the same
+    # cores, so both paths apply one implementation of each rule.
+    rej_full = triggers.rejection(e, e, e[ATR], p).to_numpy(dtype=object)
     close_full = e["close"].to_numpy(dtype=float)
+    high_full = e["high"].to_numpy(dtype=float)
+    low_full = e["low"].to_numpy(dtype=float)
+    ts_full = e["ts"].to_numpy()
+    # also carries an excursion that began before a window into it
     buf_full = triggers.breakout_buffer(e[ATR], p).to_numpy(dtype=float)
+    tol_full = triggers.test_zone(e[ATR], p).to_numpy(dtype=float)
+    body_full = e[BODY_RATIO].to_numpy(dtype=float)
+    vol_full = np.asarray(e[VOLUME_EXPANDED].fillna(False), dtype=bool)
+    bias_full = ctx.bias.to_numpy(dtype=object)
+    k_fail = int(p.get("failed_breakout.window_bars"))
+    k_range = int(p.get("range_reclaim.window_bars"))
+    k_retest = int(p.get("breakout_retest.max_bars_to_retest"))
     out: list[Candidate] = []
 
-    def sub(a, w):
-        s = e.iloc[a:w + 1].reset_index(drop=True)
-        return s, s[ATR]
+    def keep_events(events, a, b, name):
+        for ev in events:
+            c = gates.from_event(_shift_event(_event_dict(ev), a), level_name=name)
+            if _keep(c, a, b):
+                out.append(c)
 
     for lv in marked_level_intervals(ctx):
         for a, b, w in _windows(lv, n, span):
-            s, atr = sub(a, w)
+            v = slice(a, w + 1)
             prior = triggers.excursion_before(close_full, buf_full, lv.price, a)
-            found = triggers.failed_breakouts(s, lv.price, atr, p,
-                                              prior=prior).to_dict("records")
+            found = triggers._failed_breakout_events(
+                close_full[v], buf_full[v], ts_full[v], lv.price, k_fail, prior=prior)
             if mode == "buffer":
-                rej = rej_full.iloc[a:w + 1].reset_index(drop=True)
-                found += triggers.breakout_retests(s, lv.price, atr, p, rej,
-                                                   prior=prior).to_dict("records")
-            for ev in found:
-                c = gates.from_event(_shift_event(ev, a), level_name=lv.name)
-                if _keep(c, a, b):
-                    out.append(c)
+                found += triggers._breakout_retest_events(
+                    close_full[v], high_full[v], low_full[v], buf_full[v], tol_full[v],
+                    rej_full[v], ts_full[v], lv.price, k_retest, prior=prior)
+            keep_events(found, a, b, lv.name)
             if mode == "confirmation_signal":
-                for row in confirmation_signal.confirmations(s, lv.price, p).to_dict("records"):
+                s_ = e.iloc[a:w + 1].reset_index(drop=True)
+                for row in confirmation_signal.confirmations(s_, lv.price, p).to_dict("records"):
                     row = dict(row, pierce_idx=int(row["pierce_idx"]) + a,
                                resolve_idx=int(row["resolve_idx"]) + a)
                     c = gates.from_confirmation(row, level_name=lv.name)
@@ -257,23 +277,19 @@ def level_dependent_candidates(ctx: GateContext) -> list[Candidate]:
 
     for side, lv in range_edge_intervals(ctx):
         for a, b, w in _windows(lv, n, span):
-            s, atr = sub(a, w)
-            for ev in triggers.range_reclaims(s, lv.price, atr, p, side=side).to_dict("records"):
-                c = gates.from_event(_shift_event(ev, a), level_name=lv.name)
-                if _keep(c, a, b):
-                    out.append(c)
+            v = slice(a, w + 1)
+            keep_events(triggers._failed_breakout_events(
+                close_full[v], buf_full[v], ts_full[v], lv.price, k_range,
+                kind="range_reclaim", only="up" if side == "high" else "down"),
+                a, b, lv.name)
 
     for side, lv in minor_level_intervals(ctx):
         for a, b, _ in _windows(lv, n, 0):
             w = min(b + 1, n - 1)          # momentum is the crossing bar itself
-            s, _atr = sub(a, w)
-            bias = ctx.bias.iloc[a:w + 1].reset_index(drop=True)
-            vol = s[VOLUME_EXPANDED]
-            for ev in triggers.momentum_continuation(
-                    s, s, lv.price, p, bias, vol, side=side).to_dict("records"):
-                c = gates.from_event(_shift_event(ev, a), level_name=lv.name)
-                if _keep(c, a, b):
-                    out.append(c)
+            v = slice(a, w + 1)
+            keep_events(triggers._momentum_events(
+                close_full[v], body_full[v], vol_full[v], bias_full[v], ts_full[v],
+                lv.price, p, side=side), a, b, lv.name)
 
     # No de-duplication is needed: same-tick levels are merged before scanning,
     # and one level's intervals are disjoint, so an event's anchor bar can lie

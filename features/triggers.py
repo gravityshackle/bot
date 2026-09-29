@@ -135,19 +135,19 @@ def breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
                                         last closed back through the LEVEL;
                                         this is what S8/S9/S10 consume
 
-A break can repeat inside one excursion: price closes beyond the buffer,
-drifts back inside it without closing back through the level, and breaks
-again. That is still one excursion, and exit spec Part 0 anchors the stop
-on "the extreme of the failed excursion", so S8/S9 key on its start. Keyed
-on every break, one excursion fired a failed breakout (or a retest) per
-break on the same bar, each later copy with a stop that ignored the
-excursion's first extreme (found on real MES data, 2026-09-28). The close
-that ends an excursion is the one S8 calls a failure: strictly back through
-the level. A series that opens mid-excursion (bar 0 already beyond) counts
-its first bars as that excursion, so a later re-break is not a start.
-`prior` = (up, down) says whether an excursion was already running on the
-bar before `bars` begins (`excursion_before`): a window can open back inside
-the buffer mid-excursion, with nothing in it to show the excursion began.
+    A break can repeat inside one excursion: price closes beyond the buffer,
+    drifts back inside it without closing back through the level, and breaks
+    again. That is still one excursion, and exit spec Part 0 anchors the stop
+    on "the extreme of the failed excursion", so S8/S9 key on its start. Keyed
+    on every break, one excursion fired a failed breakout (or a retest) per
+    break on the same bar, each later copy with a stop that ignored the
+    excursion's first extreme (found on real MES data, 2026-09-28). The close
+    that ends an excursion is the one S8 calls a failure: strictly back through
+    the level. A series that opens mid-excursion (bar 0 already beyond) counts
+    its first bars as that excursion, so a later re-break is not a start.
+    `prior` = (up, down) says whether an excursion was already running on the
+    bar before `bars` begins (`excursion_before`): a window can open back inside
+    the buffer mid-excursion, with nothing in it to show the excursion began.
 
     The first bar can never be an event: with no prior bar there is no
     transition to observe, and treating a series that simply opens beyond a
@@ -155,45 +155,60 @@ the buffer mid-excursion, with nothing in it to show the excursion began.
     happens to start.
     """
     buf = breakout_buffer(atr, params)
-    up_close = (bars["close"] > (level + buf)).fillna(False)
-    down_close = (bars["close"] < (level - buf)).fillna(False)
-
-    prev_up = up_close.shift(1)
-    prev_down = down_close.shift(1)
-    up_break = up_close & (prev_up == False)      # noqa: E712 -- NaN must not pass
-    down_break = down_close & (prev_down == False)  # noqa: E712
-
-    close = bars["close"]
-    up_start = up_break.fillna(False) & _first_in_excursion(up_close, close < level, prior[0])
-    down_start = down_break.fillna(False) & _first_in_excursion(down_close, close > level,
-                                                                prior[1])
-
-    pierced_up = (bars["high"] > level) & ~up_close
-    pierced_down = (bars["low"] < level) & ~down_close
+    close = bars["close"].to_numpy(dtype=float)
+    up_close, down_close, up_break, down_break, up_start, down_start = \
+        _breakout_states(close, buf.to_numpy(dtype=float), level, prior)
+    pierced_up = (bars["high"].to_numpy(dtype=float) > level) & ~up_close
+    pierced_down = (bars["low"].to_numpy(dtype=float) < level) & ~down_close
     return pd.DataFrame({
         "up_close": up_close,
         "down_close": down_close,
-        "up_break": up_break.fillna(False),
-        "down_break": down_break.fillna(False),
+        "up_break": up_break,
+        "down_break": down_break,
         "up_start": up_start,
         "down_start": down_start,
-        "wick_up_only": pierced_up.fillna(False),
-        "wick_down_only": pierced_down.fillna(False),
+        "wick_up_only": pierced_up,
+        "wick_down_only": pierced_down,
         "buffer": buf,
     }, index=bars.index)
 
 
-def _first_in_excursion(beyond: pd.Series, back_through: pd.Series,
-                        running: bool = False) -> pd.Series:
+def _breakout_states(close: np.ndarray, buf: np.ndarray, level: float,
+                     prior: tuple[bool, bool] = (False, False)):
+    """`breakouts()`'s arithmetic on plain arrays. The detectors call this
+    directly: building a DataFrame per level window was most of their cost.
+    A comparison against a NaN buffer (ATR not seeded) is False."""
+    up_close = close > level + buf
+    down_close = close < level - buf
+    up_break = np.zeros(len(close), dtype=bool)
+    down_break = np.zeros(len(close), dtype=bool)
+    up_break[1:] = up_close[1:] & ~up_close[:-1]          # bar 0 is never an event
+    down_break[1:] = down_close[1:] & ~down_close[:-1]
+    up_start = up_break & _first_in_excursion(up_close, close < level, prior[0])
+    down_start = down_break & _first_in_excursion(down_close, close > level, prior[1])
+    return up_close, down_close, up_break, down_break, up_start, down_start
+
+
+def _first_in_excursion(beyond: np.ndarray, back_through: np.ndarray,
+                        running: bool = False) -> np.ndarray:
     """True where `beyond` holds for the first time since `back_through` last
     did (or since the series began). `running`: an excursion was already
     under way before the first bar, so until the first `back_through` nothing
-    is a first."""
-    run = back_through.fillna(False).astype(int).cumsum()
-    count = beyond.astype(int).groupby(run).cumsum()
+    is a first.
+
+    Each `back_through` bar (or bar 0) starts a group; the count is the
+    running number of `beyond` bars inside the group.
+    """
+    n = len(beyond)
+    if n == 0:
+        return np.zeros(0, dtype=bool)
+    seen = np.cumsum(beyond)                     # beyond bars up to and including i
+    before = seen - beyond                       # ... strictly before i
+    start = np.maximum.accumulate(np.where(back_through, np.arange(n), 0))
+    count = seen - before[start]
     if running:
-        count = count + (run == 0).astype(int)
-    return count.eq(1) & beyond
+        count = count + (np.cumsum(back_through) == 0)
+    return (count == 1) & beyond
 
 
 def excursion_before(close: np.ndarray, buffer: np.ndarray, level: float,
@@ -376,36 +391,43 @@ def failed_breakouts(bars: pd.DataFrame, level: float, atr: pd.Series,
     """
     if only not in (None, "up", "down"):
         raise ValueError(f"only must be None|'up'|'down', got {only!r}")
-    k = int(params.get(window_key))
-    b = breakouts(bars, level, atr, params, prior)
-    events: list[TriggerEvent] = []
-    close = bars["close"].to_numpy()
+    return _events_frame(_failed_breakout_events(
+        bars["close"].to_numpy(dtype=float),
+        breakout_buffer(atr, params).to_numpy(dtype=float),
+        bars["ts"].to_numpy(), level, int(params.get(window_key)),
+        kind=kind, only=only, prior=prior))
+
+
+def _failed_breakout_events(close: np.ndarray, buf: np.ndarray, ts: np.ndarray,
+                            level: float, k: int, *, kind: str = "failed_breakout",
+                            only: str | None = None,
+                            prior: tuple[bool, bool] = (False, False)
+                            ) -> list[TriggerEvent]:
+    """S8/S10 on plain arrays; positions are relative to the arrays given."""
+    up_brk, dn_brk = _breakout_states(close, buf, level, prior)[4:]
     up_ok = only in (None, "up")
     down_ok = only in (None, "down")
-    # Plain arrays, and only the breakout bars visited: a per-bar DataFrame
-    # column lookup made this the dominant cost of scanning every level.
+    n = len(close)
+    events: list[TriggerEvent] = []
     # one failed breakout per EXCURSION, anchored to its first close beyond
-    up_brk = b["up_start"].to_numpy(dtype=bool)
-    dn_brk = b["down_start"].to_numpy(dtype=bool)
-
     for i in map(int, np.flatnonzero(up_brk | dn_brk)):
         if up_ok and up_brk[i]:
-            for j in range(i + 1, min(i + 1 + k, len(bars))):
+            for j in range(i + 1, min(i + 1 + k, n)):
                 if close[j] < level:
                     events.append(TriggerEvent(
-                        idx=j, ts=bars["ts"].iloc[j], kind=kind, direction=SHORT,
+                        idx=j, ts=ts[j], kind=kind, direction=SHORT,
                         level=level, price=float(close[j]),
                         meta={"breakout_idx": i, "bars_to_fail": j - i}))
                     break
         elif down_ok and dn_brk[i]:
-            for j in range(i + 1, min(i + 1 + k, len(bars))):
+            for j in range(i + 1, min(i + 1 + k, n)):
                 if close[j] > level:
                     events.append(TriggerEvent(
-                        idx=j, ts=bars["ts"].iloc[j], kind=kind, direction=LONG,
+                        idx=j, ts=ts[j], kind=kind, direction=LONG,
                         level=level, price=float(close[j]),
                         meta={"breakout_idx": i, "bars_to_fail": j - i}))
                     break
-    return _events_frame(events)
+    return events
 
 
 def range_reclaims(bars: pd.DataFrame, edge: float, atr: pd.Series,
@@ -443,31 +465,44 @@ def breakout_retests(bars: pd.DataFrame, level: float, atr: pd.Series,
     direction before the retest -- that is an S8 failed breakout instead, and
     the two must not both fire on the same sequence.
     """
-    k_max = int(params.get("breakout_retest.max_bars_to_retest"))
-    b = breakouts(bars, level, atr, params, prior)
-    zone = in_test_zone(bars, level, atr, params).to_numpy(dtype=bool)
-    rej = rejection_dir.to_numpy(dtype=object)
-    close = bars["close"].to_numpy()
-    up_brk = b["up_start"].to_numpy(dtype=bool)       # one per excursion, as S8
-    dn_brk = b["down_start"].to_numpy(dtype=bool)
-    events: list[TriggerEvent] = []
+    return _events_frame(_breakout_retest_events(
+        bars["close"].to_numpy(dtype=float), bars["high"].to_numpy(dtype=float),
+        bars["low"].to_numpy(dtype=float),
+        breakout_buffer(atr, params).to_numpy(dtype=float),
+        test_zone(atr, params).to_numpy(dtype=float),
+        rejection_dir.to_numpy(dtype=object), bars["ts"].to_numpy(), level,
+        int(params.get("breakout_retest.max_bars_to_retest")), prior=prior))
 
-    for i in map(int, np.flatnonzero(up_brk | dn_brk)):
+
+def _breakout_retest_events(close: np.ndarray, high: np.ndarray, low: np.ndarray,
+                            buf: np.ndarray, tol: np.ndarray, rej: np.ndarray,
+                            ts: np.ndarray, level: float, k_max: int, *,
+                            prior: tuple[bool, bool] = (False, False)
+                            ) -> list[TriggerEvent]:
+    """S9 on plain arrays; positions are relative to the arrays given. The
+    test zone is `in_test_zone()`'s rule: the bar straddles the level, or its
+    nearer extreme is within the tolerance (a NaN tolerance never is)."""
+    up_brk, dn_brk = _breakout_states(close, buf, level, prior)[4:]
+    dist = np.minimum(np.abs(high - level), np.abs(low - level))
+    zone = ((low <= level) & (high >= level)) | (dist <= tol)
+    n = len(close)
+    events: list[TriggerEvent] = []
+    for i in map(int, np.flatnonzero(up_brk | dn_brk)):   # one per excursion, as S8
         for up in (True, False):
             if not (up_brk[i] if up else dn_brk[i]):
                 continue
             want = LONG if up else SHORT
-            for j in range(i + 1, min(i + 1 + k_max, len(bars))):
+            for j in range(i + 1, min(i + 1 + k_max, n)):
                 failed = close[j] < level if up else close[j] > level
                 if failed:
                     break            # S8 territory, not a retest
                 if zone[j] and rej[j] == want:
                     events.append(TriggerEvent(
-                        idx=j, ts=bars["ts"].iloc[j], kind="breakout_retest",
+                        idx=j, ts=ts[j], kind="breakout_retest",
                         direction=want, level=level, price=float(close[j]),
                         meta={"breakout_idx": i, "bars_to_retest": j - i}))
                     break
-    return _events_frame(events)
+    return events
 
 
 # --------------------------------------------------------------------------
@@ -508,36 +543,40 @@ def momentum_continuation(bars: pd.DataFrame, feats: pd.DataFrame,
     """
     if side not in ("high", "low"):
         raise ValueError(f"side must be 'high' or 'low', got {side!r}")
+    return _events_frame(_momentum_events(
+        bars["close"].to_numpy(dtype=float), feats[BODY_RATIO].to_numpy(dtype=float),
+        np.asarray(pd.Series(volume_expanded).fillna(False), dtype=bool),
+        np.asarray(bias, dtype=object), bars["ts"].to_numpy(), minor_level, params,
+        side=side))
+
+
+def _momentum_events(close: np.ndarray, body_ratio: np.ndarray, vol: np.ndarray,
+                     bias: np.ndarray, ts: np.ndarray, minor_level: float,
+                     params: Params, *, side: str) -> list[TriggerEvent]:
+    """S11 on plain arrays; positions are relative to the arrays given. A NaN
+    body ratio or bias never passes, as with the fillna(False) it replaces."""
     min_ratio = float(params.get("momentum.min_body_ratio"))
     need_trend = bool(params.get("momentum.requires_trend_alignment"))
     need_vol = bool(params.get("momentum.requires_volume_expansion"))
-
-    strong = feats[BODY_RATIO] >= min_ratio
-    vol_ok = volume_expanded if need_vol else pd.Series(True, index=bars.index)
-
-    up = (bars["close"] > minor_level).fillna(False)
-    down = (bars["close"] < minor_level).fillna(False)
-    # noqa: E712 below -- NaN must not pass as "was not beyond"
-    up_cross = up & (up.shift(1) == False)      # noqa: E712
-    down_cross = down & (down.shift(1) == False)  # noqa: E712
-
-    bull_ok = (bias == "bullish") if need_trend else pd.Series(True, index=bars.index)
-    bear_ok = (bias == "bearish") if need_trend else pd.Series(True, index=bars.index)
-
-    long_hit = (strong & vol_ok & up_cross & bull_ok).fillna(False)
-    short_hit = (strong & vol_ok & down_cross & bear_ok).fillna(False)
+    n = len(close)
+    strong = body_ratio >= min_ratio
+    vol_ok = vol if need_vol else np.ones(n, dtype=bool)
+    up = close > minor_level
+    down = close < minor_level
+    up_cross = np.zeros(n, dtype=bool)
+    down_cross = np.zeros(n, dtype=bool)
+    up_cross[1:] = up[1:] & ~up[:-1]            # bar 0 has no prior bar to cross from
+    down_cross[1:] = down[1:] & ~down[:-1]
+    bull_ok = (bias == "bullish") if need_trend else np.ones(n, dtype=bool)
+    bear_ok = (bias == "bearish") if need_trend else np.ones(n, dtype=bool)
     if side == "high":
-        short_hit = short_hit & False
+        longs = strong & vol_ok & up_cross & bull_ok
+        shorts = np.zeros(n, dtype=bool)
     else:
-        long_hit = long_hit & False
-
-    longs = long_hit.to_numpy(dtype=bool)
-    hits = np.flatnonzero(longs | short_hit.to_numpy(dtype=bool))
-    events = [
-        TriggerEvent(idx=i, ts=bars["ts"].iloc[i], kind="momentum",
-                     direction=LONG if longs[i] else SHORT,
-                     level=minor_level, price=float(bars["close"].iloc[i]),
-                     meta={"body_ratio": float(feats[BODY_RATIO].iloc[i])})
-        for i in map(int, hits)
-    ]
-    return _events_frame(events)
+        longs = np.zeros(n, dtype=bool)
+        shorts = strong & vol_ok & down_cross & bear_ok
+    return [TriggerEvent(idx=i, ts=ts[i], kind="momentum",
+                         direction=LONG if longs[i] else SHORT,
+                         level=minor_level, price=float(close[i]),
+                         meta={"body_ratio": float(body_ratio[i])})
+            for i in map(int, np.flatnonzero(longs | shorts))]
