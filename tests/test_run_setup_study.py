@@ -229,7 +229,14 @@ def test_the_stamp_follows_real_code_and_config_bytes(tmp_path):
     code_changed = rs.stamp("MES", None, tmp_path)
     assert code_changed["code_sha"] != base["code_sha"] and code_changed["config_sha"] == base["config_sha"]
     (tmp_path / "config" / "risk.yaml").write_text("a: 2\n", encoding="utf-8")
-    assert rs.stamp("MES", None, tmp_path)["config_sha"] != base["config_sha"]
+    config_changed = rs.stamp("MES", None, tmp_path)
+    assert config_changed["config_sha"] != base["config_sha"]
+    # read-only analysis settings are not a study input, but a look-alike name is
+    (tmp_path / "config" / "analysis").mkdir()
+    (tmp_path / "config" / "analysis" / "a4.yaml").write_text("split: x\n", encoding="utf-8")
+    assert rs.stamp("MES", None, tmp_path) == config_changed
+    (tmp_path / "config" / "analysis_extra.yaml").write_text("b: 1\n", encoding="utf-8")
+    assert rs.stamp("MES", None, tmp_path)["config_sha"] != config_changed["config_sha"]
 
 
 def test_code_changed_while_computing_discards_the_result(tmp_path, monkeypatch):

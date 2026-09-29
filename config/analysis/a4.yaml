@@ -1,0 +1,55 @@
+# Phase 4.4: the A4 analysis (docs/phase4_questions.md, A4). Decided 2026-09-29.
+#
+# Read-only analysis of the setup study's results (cache/setup_study/). The
+# study never loads this file, and scripts/run_setup_study.py leaves
+# config/analysis/ out of its stamp, so editing it never marks study results
+# stale.
+
+# In-sample is everything before this date (UTC), out-of-sample is from it on:
+# the last two years, as in phase4_plan.md's 3-year/2-year example. One date for
+# all instruments. MET and MCL have shorter in-sample windows.
+split_date: "2024-09-12"
+
+# The verdict metric: r_gross, R after slippage and before fees (decided
+# 2026-09-29, superseding r_net: on MET the fees exceed the risk on the median
+# trade, and the fee share of risk grows with RR band). Signal R and r_net are
+# reported beside it, and cost drag is its own finding, not part of the verdict.
+outcome: r_gross
+
+# Score bands: quantile edges per instrument, from IN-SAMPLE sized setups only,
+# then applied unchanged to out-of-sample.
+score_quantiles: 5
+
+# RR bands, left-closed: [2, 2.5) [2.5, 3) [3, 4) [4, 6) [6, inf). The top band
+# is open. targets.rr_cap (params.yaml) must be one of these edges: bands below
+# it are the component's live range, bands from it up are the saturated range.
+rr_band_edges: [2.0, 2.5, 3.0, 4.0, 6.0]
+
+bootstrap:
+  draws: 2000
+  seed: 20260929
+  confidence: 0.95
+
+# A cell with fewer filled trades than this is flagged thin; its figures are
+# still printed, but it cannot carry a direction on its own.
+min_cell_trades: 30
+
+# R distribution: the share of all positive R supplied by the top fraction of
+# winners (A1 found 5 winners carried half of it over three months).
+tail_top_fraction: 0.05
+
+# Instruments whose sizing discards shift across the split (A4 record,
+# corrected 2026-09-29): their trend must pass the stricter check first.
+sizing_shift_symbols: [MNQ, MGC, SIL]
+# Every figure from these is low-sample/directional-only, and never answers A4 alone.
+directional_only_symbols: [SIL]
+
+stricter_check:
+  # Stop width in multiples of the previous completed session's daily ATR,
+  # with the period taken from params.yaml atr.period.
+  # "The range out-of-sample survivors cover": between these quantiles of
+  # their ATR-scaled stop width, so a handful of outliers can't stretch it.
+  support_quantiles: [0.05, 0.95]
+  # Reweighting: in-sample survivors are weighted so their share in each of
+  # these out-of-sample quantile bins of ATR-scaled stop width matches OOS.
+  reweight_bins: 10

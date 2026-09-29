@@ -11,7 +11,7 @@ cache/setup_study/), one pair of files per instrument:
 
 RESUMABLE. An instrument counts as done only when its manifest's stamp equals
 the stamp this run would write (a hash of every source file in the engine's
-packages, every config file, the symbol and the window) AND the data file
+packages, every config file except config/analysis/, the symbol and the window) AND the data file
 matches the sha256 the manifest records. Anything else is missing, stale or
 corrupt, and is re-run. Files are written under a temporary name and then
 renamed, and the manifest goes last, so a run killed at any point leaves either
@@ -54,6 +54,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 CODE_DIRS = ("backtest", "data", "execution", "features", "risk_engine", "signal_engine")
 CONFIG_DIR = "config"
+# Settings for analyses that only READ study results (config/analysis/). The
+# study never loads them, so they must not mark finished results stale.
+CONFIG_EXCLUDE = ("config/analysis",)
 DEFAULT_OUT = Path("cache") / "setup_study"
 LOCK_DIR = Path("cache")
 JOB_LOCK = "setup_study.job.lock"
@@ -64,11 +67,14 @@ OK, USAGE, LOCKED, WORKER_FAILED, CODE_CHANGED = 0, 2, 3, 4, 5
 
 # --- stamp and status -------------------------------------------------------
 
-def _tree_sha(root: Path, rel_dirs, pattern: str) -> str:
+def _tree_sha(root: Path, rel_dirs, pattern: str, exclude=()) -> str:
     h = hashlib.sha256()
     for d in rel_dirs:
         for p in sorted((root / d).rglob(pattern)):
             if "__pycache__" in p.parts or not p.is_file():
+                continue
+            rel = p.relative_to(root).as_posix()
+            if any(rel == x or rel.startswith(x + "/") for x in exclude):
                 continue
             h.update(p.relative_to(root).as_posix().encode("utf-8") + b"\0")
             h.update(p.read_bytes() + b"\0")
@@ -80,7 +86,7 @@ def stamp(symbol: str, days: int | None, root: Path | None = None) -> dict:
     root = root or ROOT
     return {"symbol": symbol, "days": days,
             "code_sha": _tree_sha(root, CODE_DIRS, "*.py"),
-            "config_sha": _tree_sha(root, (CONFIG_DIR,), "*")}
+            "config_sha": _tree_sha(root, (CONFIG_DIR,), "*", CONFIG_EXCLUDE)}
 
 
 def _file_sha(p: Path) -> str:
