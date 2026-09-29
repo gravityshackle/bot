@@ -31,7 +31,8 @@ from analysis import a4, mfe  # noqa: E402
 
 MFE = Path("cache") / "analysis" / "mfe"
 REVERSAL = ("three_tail", "rejection", "engulfing", "failed_breakout", "range_reclaim")
-STUDY_COLS = ["period", "kind", "exit_kind", "path", "r_signal", "r_gross", "r_net"]
+STUDY_COLS = ["period", "kind", "exit_kind", "path", "r_signal", "r_gross", "r_net", "target_source", "stop_atr"]
+PRIOR = Path("cache") / "analysis" / "prior_atr"
 
 
 def main() -> int:
@@ -42,6 +43,8 @@ def main() -> int:
         if info["study_data_sha256"] != man["data_sha256"] or info["bracket_mismatches"] != 0:
             raise SystemExit(f"{s}: MFE results do not belong to the verified study result, or failed equivalence")
         p = a4.prepare(df, a4.A4Config.load(s), slippage=rep.slippage_by_kind(s, df["exit_kind"].dropna().unique()))
+        p["stop_atr"] = a4.stop_width_atr(p, pickle.load(open(PRIOR / f"{s}.pkl", "rb")),
+                                          rep.load_symbol_config(s)).to_numpy()
         m = pickle.load(open(MFE / f"{s}.pkl", "rb"))
         f = p.loc[p["filled"], STUDY_COLS]
         if not f.index.equals(m.index.sort_values()) and set(f.index) != set(m.index):
@@ -79,6 +82,21 @@ def main() -> int:
             print(f"  {d['period']:3} {str(d[by]) if by != 'all' else '':16} {eff}")
         print()
 
+    # the target in R is (level distance) / (stop width): both in prior-session daily ATR
+    f["target_atr"] = f["stop_atr"] * f["target_r"]
+    f["mfe_atr"] = f["stop_atr"] * f["mfe_r"]
+    sc_ = f.dropna(subset=["stop_atr"])
+    scale = sc_.groupby("kind").agg(n=("target_r", "size"),
+                                    fallback_2r=("target_source", lambda x: float((x == "2R_fallback").mean())),
+                                    target_r=("target_r", "median"), stop_atr=("stop_atr", "median"),
+                                    target_atr=("target_atr", "median"), mfe_atr=("mfe_atr", "median"),
+                                    mfe_r=("mfe_r", "median"))
+    scale.loc["ALL"] = [len(sc_), float((sc_["target_source"] == "2R_fallback").mean()), sc_["target_r"].median(),
+                        sc_["stop_atr"].median(), sc_["target_atr"].median(), sc_["mfe_atr"].median(),
+                        sc_["mfe_r"].median()]
+    print("scale: medians in R and in prior-session daily ATR (target R = target_atr / stop_atr)\n"
+          + scale.round(3).to_string() + "\n")
+
     ok = f[f["bracket_exit"] != "unresolved"]
     e = (ok.assign(effect=mfe.paired(ok, "r_signal", "bracket_r_signal"))
          .pivot_table(index="symbol", columns="period", values="effect", aggfunc="mean"))
@@ -86,6 +104,7 @@ def main() -> int:
     b = ok.pivot_table(index="symbol", columns="period", values="bracket_r_signal", aggfunc="mean")
     print("\nper instrument: plain-bracket signal R\n" + b.round(3).to_string())
     out = {"n": int(len(f)), "tables": {k: v.to_dict("records") for k, v in tables.items()},
+           "scale": scale.reset_index().to_dict("records"),
            "per_instrument_effect_signal": e.round(6).reset_index().to_dict("records"),
            "per_instrument_bracket_signal": b.round(6).reset_index().to_dict("records")}
     (Path("cache") / "analysis" / "mfe_by_trigger.json").write_text(json.dumps(rep._json(out), indent=1),
