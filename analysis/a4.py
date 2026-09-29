@@ -16,7 +16,10 @@ The verdict metric is r_gross: after slippage, before fees (decided 2026-09-29;
 the question is whether the component picks better setups, whatever the cost
 structure). It sits between two other layers, and each cell and trend reports
 all three:
-  signal R  exit at its intended price (exit_reference): no slippage, no fees
+  signal R  r_gross with each market exit's modelled slippage added back
+            (the cost model's slippage per exit kind; limit exits have
+            none). Gap-through losses stay in: a stop the bar opened beyond
+            fills from the open, and that loss is the market, not a cost
   r_gross   the actual fill: slippage in, fees out
   r_net     fees in too: the tradeable result at 1 contract
 Cost attribution per trend: "slippage" when signal R and r_gross directions
@@ -157,11 +160,23 @@ def score_band(scores: pd.Series, edges: np.ndarray) -> pd.Series:
 
 # --- flags and populations -------------------------------------------------------------
 
-def signal_r(df: pd.DataFrame) -> pd.Series:
-    """R had the exit filled at its intended price (exit_reference), on the same
-    initial risk r_gross uses (entry fill to the resting stop order). Direction
-    needs no sign: it flips the move and the risk alike, so the ratio holds."""
-    return (df["exit_reference"] - df["entry_fill"]) / (df["entry_fill"] - df["stop_order"])
+def signal_r(df: pd.DataFrame, slippage: dict) -> pd.Series:
+    """Exact R before slippage: r_gross plus the modelled slippage of the exit's
+    kind, over the same initial risk r_gross uses (entry fill to the resting
+    stop order). Not exit_reference: a gapped stop's reference is the stop
+    price, but it fills from the open, and that gap loss must stay in.
+
+    `slippage` maps exit kind -> adverse slippage in price points, from the
+    study's own cost model (CostModel.slippage). Entries are limit orders and
+    carry none. An exit kind the map doesn't know is an error, not a zero."""
+    filled = df["entry_status"].astype("object").eq("filled").fillna(False)
+    kinds = df.loc[filled, "exit_kind"]
+    unknown = sorted(set(kinds.dropna()) - set(slippage))
+    if unknown or kinds.isna().any():
+        raise ValueError(f"no slippage figure for exit kinds {unknown or ['<missing>']}")
+    slip = df["exit_kind"].map(slippage).astype("float64")
+    risk_pts = (df["entry_fill"] - df["stop_order"]).abs()
+    return (df["r_gross"] + slip / risk_pts).where(filled)
 
 
 def add_flags(df: pd.DataFrame, outcome: str = "r_gross") -> pd.DataFrame:
@@ -173,9 +188,9 @@ def add_flags(df: pd.DataFrame, outcome: str = "r_gross") -> pd.DataFrame:
     return out
 
 
-def prepare(df: pd.DataFrame, cfg: A4Config) -> pd.DataFrame:
+def prepare(df: pd.DataFrame, cfg: A4Config, *, slippage: dict) -> pd.DataFrame:
     df = df.copy()
-    df["r_signal"] = signal_r(df).where(df["entry_status"].astype("object").eq("filled").fillna(False))
+    df["r_signal"] = signal_r(df, slippage)
     p = add_flags(df, cfg.outcome)
     bad = int((p["filled"] & ~p["sized"]).sum())
     if bad:

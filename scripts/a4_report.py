@@ -32,7 +32,9 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from analysis import a4  # noqa: E402
+from backtest.setup_study import StudyConfig  # noqa: E402
 from data.pipeline import load_symbol_config  # noqa: E402
+from features.schema import load_params  # noqa: E402
 
 STUDY = Path("cache") / "setup_study"
 PRIOR = Path("cache") / "analysis" / "prior_atr"
@@ -49,6 +51,20 @@ def _load(sym: str) -> tuple[pd.DataFrame, dict]:
         raise SystemExit(f"{sym}: study result is {why}; re-run scripts/run_setup_study.py first")
     man = json.loads((STUDY / f"{sym}.json").read_text(encoding="utf-8"))
     return pd.read_pickle(STUDY / f"{sym}.pkl"), man
+
+
+def slippage_by_kind(sym: str, kinds) -> dict:
+    """The study's own cost model's slippage per exit kind, in price points."""
+    import yaml
+
+    def y(p):
+        with open(p, encoding="utf-8") as fh:
+            return yaml.safe_load(fh)
+
+    sc = StudyConfig.from_configs(costs_cfg=y("config/costs.yaml"), exec_cfg=y("config/execution.yaml"),
+                                  risk_cfg=y("config/risk.yaml"), symbol_cfg=load_symbol_config(sym),
+                                  timeframe=str(load_params(sym).get("timeframes.entry")))
+    return {k: sc.cost.slippage(k) for k in kinds}
 
 
 def _json(v):
@@ -125,7 +141,7 @@ def report(sym: str) -> dict:
     df, man = _load(sym)
     cfg = a4.A4Config.load(sym)
     prior = pickle.load(open(PRIOR / f"{sym}.pkl", "rb"))
-    p = a4.prepare(df, cfg)
+    p = a4.prepare(df, cfg, slippage=slippage_by_kind(sym, df["exit_kind"].dropna().unique()))
     p["stop_atr"] = a4.stop_width_atr(p, prior, load_symbol_config(sym)).to_numpy()
     rr_t, sc_t = a4.band_table(p, "rr_band", cfg), a4.band_table(p, "score_q", cfg)
     ans = {"component": a4.rr_component_answer(p, cfg, sym), "cap": a4.cap_answer(p, cfg, sym),

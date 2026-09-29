@@ -7,7 +7,8 @@ What is pinned:
   - Populations: fill rate is over sized setups. Win rate, expectancy and the
     R distribution are over filled trades only, on the verdict metric
     (r_gross: after slippage, before fees; decided 2026-09-29). Signal R
-    (exit at the intended price) and r_net are the layers either side of it. Discarded setups (0
+    (r_gross with the modelled slippage added back, gap losses kept) and
+    r_net are the layers either side of it. Discarded setups (0
     contracts) are counted but never enter an outcome figure.
   - Stop width in ATR: the previous completed session's daily ATR, looked up
     by each setup's own trade date, so a session's own range never scales its
@@ -46,20 +47,24 @@ def cfg(**over) -> a4.A4Config:
     return a4.A4Config(**base)
 
 
+SLIP = {"stop_market_exit": 0.0, "target_limit": 0.0, "day_boundary_flatten": 0.0}
+
+
 def frame(n, *, ts, rr, r, score=None, contracts=1, filled=True, path=None, stop_atr=None,
-          slip=0.0, fee=0.0):
+          risk=1.0, slip_pts=0.0, fee=0.0):
     """A minimal study-shaped frame. Every array argument has length n.
 
-    `r` is r_gross. A long entry at 100 with its stop at 99 makes 1 point = 1 R,
-    so exit_reference = 100 + r + slip gives signal R = r + slip, and fees of
-    `fee` R give r_net = r - fee."""
+    `r` is r_gross. A long entry at 100 with its stop `risk` points below;
+    stop-market exits slip `slip_pts` (pass the same figure to prepare), so
+    signal R = r + slip_pts / risk. Fees of `fee` R give r_net = r - fee."""
     r = np.asarray(r, dtype="float64") * np.ones(n)
-    slip = np.asarray(slip, dtype="float64") * np.ones(n)
+    risk = np.asarray(risk, dtype="float64") * np.ones(n)
     fee = np.asarray(fee, dtype="float64") * np.ones(n)
     df = pd.DataFrame({
-        "ts": ts, "rr": rr, "direction": "long", "entry_fill": 100.0, "stop_order": 99.0,
-        "exit_fill": 100.0 + r, "exit_reference": 100.0 + r + slip,
-        "r_gross": r, "r_net": r - fee, "risk_usd": 1.0, "fees_usd": fee, "net_usd": r - fee,
+        "ts": ts, "rr": rr, "direction": "long", "entry_fill": 100.0, "stop_order": 100.0 - risk,
+        "exit_kind": "stop_market_exit", "exit_fill": 100.0 + r * risk,
+        "exit_reference": 100.0 + r * risk + slip_pts,
+        "r_gross": r, "r_net": r - fee, "risk_usd": risk, "fees_usd": fee * risk, "net_usd": (r - fee) * risk,
         "score": score if score is not None else np.linspace(40, 80, n),
         "contracts": contracts,
         "entry_status": np.where(np.asarray(filled) if not np.isscalar(filled) else np.full(n, filled),
@@ -67,6 +72,7 @@ def frame(n, *, ts, rr, r, score=None, contracts=1, filled=True, path=None, stop
         "path": path if path is not None else "stopped_out",
     })
     out = ["r_net", "r_gross", "exit_fill", "exit_reference", "entry_fill", "fees_usd", "net_usd", "risk_usd"]
+    df.loc[df["entry_status"] != "filled", "exit_kind"] = None
     df.loc[df["entry_status"] != "filled", out] = np.nan
     df.loc[df["contracts"] == 0, "entry_status"] = pd.NA
     df.loc[df["contracts"] == 0, out] = np.nan
@@ -114,7 +120,7 @@ def test_prepare_bands_oos_by_in_sample_score_edges():
     n = 200
     ts = pd.date_range("2023-01-01", periods=n, freq="7D", tz="UTC")
     score = np.where(ts < SPLIT, np.linspace(0, 100, n), 1000.0)     # OOS scores far above IS
-    p = a4.prepare(frame(n, ts=ts, rr=np.full(n, 2.2), r=np.zeros(n), score=score), cfg())
+    p = a4.prepare(frame(n, ts=ts, rr=np.full(n, 2.2), r=np.zeros(n), score=score), cfg(), slippage=SLIP)
     assert set(p.loc[p["period"] == "OOS", "score_q"]) == {5}
     assert set(p.loc[p["period"] == "IS", "score_q"]) == {1, 2, 3, 4, 5}
     assert (p["period"] == "IS").sum() == (ts < SPLIT).sum()
@@ -158,7 +164,7 @@ def test_a_discarded_setup_marked_filled_is_refused():
     df.loc[3, "contracts"] = 0                      # discarded, yet...
     df.loc[3, "entry_status"] = "filled"            # ...marked filled
     with pytest.raises(ValueError, match="sized to 0 contracts are marked filled"):
-        a4.prepare(df, cfg())
+        a4.prepare(df, cfg(), slippage=SLIP)
 
 
 def test_tail_share_is_the_top_fraction_of_winners_share_of_positive_r():
@@ -330,13 +336,13 @@ def _confound_frames(real_rr_effect: bool):
 
 def test_stricter_check_exposes_a_trend_made_by_sizing_composition():
     c = cfg(draws=300)
-    res = a4.rr_component_answer(a4.prepare(_confound_frames(real_rr_effect=False), c), c, "MNQ")
+    res = a4.rr_component_answer(a4.prepare(_confound_frames(real_rr_effect=False), c, slippage=SLIP), c, "MNQ")
     assert res["IS"]["direction"] == "up"                     # the raw in-sample trend looks real
     assert res["IS_restricted"]["direction"] == "up"          # restriction alone doesn't remove it
     assert res["IS_stratified"]["direction"] == "flat"        # comparing within stop width does
     assert res["IS_stratified"]["oos_coverage"] == pytest.approx(1.0)
     # the restriction is to the OOS range, not in-sample's own
-    p = a4.prepare(_confound_frames(real_rr_effect=False), c)
+    p = a4.prepare(_confound_frames(real_rr_effect=False), c, slippage=SLIP)
     f = p[p["filled"]]
     lo, hi = np.quantile(f.loc[f["period"] == "OOS", "stop_atr"], c.support_quantiles)
     s_is = f.loc[f["period"] == "IS", "stop_atr"]
@@ -347,7 +353,7 @@ def test_stricter_check_exposes_a_trend_made_by_sizing_composition():
 
 def test_stricter_check_keeps_a_real_trend():
     c = cfg(draws=300)
-    res = a4.rr_component_answer(a4.prepare(_confound_frames(real_rr_effect=True), c), c, "MNQ")
+    res = a4.rr_component_answer(a4.prepare(_confound_frames(real_rr_effect=True), c, slippage=SLIP), c, "MNQ")
     assert res["IS"]["direction"] == "up"
     assert res["IS_restricted"]["direction"] == "up"
     assert res["IS_stratified"]["direction"] == "up"
@@ -357,7 +363,7 @@ def test_stricter_check_keeps_a_real_trend():
 
 def test_direct_instruments_skip_the_stricter_check_but_flag_directional_only():
     c = cfg(draws=200)
-    p = a4.prepare(_confound_frames(real_rr_effect=True), c)
+    p = a4.prepare(_confound_frames(real_rr_effect=True), c, slippage=SLIP)
     mes = a4.rr_component_answer(p, c, "MES")
     assert "IS_restricted" not in mes and mes["verdict"] == "consistent: up" and not mes["directional_only"]
     sil = a4.rr_component_answer(p, c, "SIL")
@@ -374,17 +380,38 @@ def test_ks_statistic():
 
 # --- cost layers ---------------------------------------------------------------------------------
 
-def test_signal_r_is_the_exit_at_its_intended_price_long_and_short():
-    df = pd.DataFrame({"direction": ["long", "short"], "entry_fill": [100.0, 100.0],
-                       "stop_order": [98.0, 102.0], "exit_reference": [104.0, 97.0],
-                       "entry_status": ["filled", "filled"]})
-    assert list(a4.signal_r(df)) == [2.0, 1.5]
+def test_signal_r_adds_back_exactly_the_modelled_slippage_long_and_short():
+    df = pd.DataFrame({"direction": ["long", "short", "long"], "entry_fill": [100.0, 100.0, 100.0],
+                       "stop_order": [98.0, 102.0, 99.0], "r_gross": [-1.125, -1.125, 2.0],
+                       "exit_kind": ["stop_market_exit", "stop_market_exit", "target_limit"],
+                       "entry_status": ["filled", "filled", "filled"]})
+    r = a4.signal_r(df, {"stop_market_exit": 0.25, "target_limit": 0.0})
+    assert list(r) == [-1.0, -1.0, 2.0]
+
+
+def test_a_gapped_stop_keeps_its_gap_loss_in_signal_r():
+    # Regression, real data (2026-09-29): 31% of MET's stop exits gapped.
+    # Long 100, stop 99 (1 R). The bar opens at 98, so the stop fills from the
+    # open minus 1 tick of slippage: 97.75, r_gross -2.25. exit_reference is
+    # still the stop price, 99; pricing the exit there gave -1.0 and hid a
+    # 1.25 R gap loss. Before-slippage R is -2.0: only the tick comes back.
+    df = pd.DataFrame({"direction": ["long"], "entry_fill": [100.0], "stop_order": [99.0],
+                       "exit_reference": [99.0], "exit_fill": [97.75], "r_gross": [-2.25],
+                       "exit_kind": ["stop_market_exit"], "entry_status": ["filled"]})
+    assert a4.signal_r(df, {"stop_market_exit": 0.25}).iloc[0] == pytest.approx(-2.0)
+
+
+def test_an_exit_kind_without_a_slippage_figure_is_refused():
+    df = pd.DataFrame({"direction": ["long"], "entry_fill": [100.0], "stop_order": [99.0],
+                       "r_gross": [1.0], "exit_kind": ["mystery_exit"], "entry_status": ["filled"]})
+    with pytest.raises(ValueError, match="mystery_exit"):
+        a4.signal_r(df, {"stop_market_exit": 0.25})
 
 
 def test_win_rate_uses_the_verdict_metric_not_r_net():
     n = 60
     p = a4.prepare(frame(n, ts=pd.date_range("2023-01-01", periods=n, freq="7D", tz="UTC"),
-                         rr=np.full(n, 2.2), r=np.full(n, 0.2), fee=0.5), cfg())
+                         rr=np.full(n, 2.2), r=np.full(n, 0.2), fee=0.5), cfg(), slippage=SLIP)
     assert p["win"].all() and (p["r_net"] < 0).all()
 
 
@@ -396,16 +423,18 @@ def _cost_frames(kind: str):
     ts = np.r_[pd.date_range("2021-10-01", periods=n // 2, freq="3h", tz="UTC"),
                pd.date_range("2024-10-01", periods=n // 2, freq="3h", tz="UTC")]
     base = rng.normal(0, 1, n)
-    cost = 0.4 * band
     rr = np.array([2.2, 2.7, 3.5])[band]
     if kind == "fees":
-        return frame(n, ts=ts, rr=rr, r=base, fee=cost, stop_atr=rng.uniform(0.2, 1.0, n))
-    return frame(n, ts=ts, rr=rr, r=base - cost, slip=cost, stop_atr=rng.uniform(0.2, 1.0, n))
+        return frame(n, ts=ts, rr=rr, r=base, fee=0.4 * band, stop_atr=rng.uniform(0.2, 1.0, n))
+    # a fixed slippage in points costs more R as the stop tightens with the band
+    risk = np.array([1.0, 0.5, 0.25])[band]
+    return frame(n, ts=ts, rr=rr, r=base - 0.25 / risk, risk=risk, slip_pts=0.25,
+                 stop_atr=rng.uniform(0.2, 1.0, n))
 
 
 def test_attribution_names_fees_when_only_fees_make_the_trend():
     c = cfg(draws=300)
-    res = a4.rr_component_answer(a4.prepare(_cost_frames("fees"), c), c, "MNQ")
+    res = a4.rr_component_answer(a4.prepare(_cost_frames("fees"), c, slippage=SLIP), c, "MNQ")
     assert res["verdict"] == "consistent: flat"                      # r_gross decides
     assert res["layers"]["IS"]["r_net"]["direction"] == "down"
     assert res["attribution"]["fees"] == {"IS": True, "OOS": True}
@@ -415,7 +444,7 @@ def test_attribution_names_fees_when_only_fees_make_the_trend():
 
 def test_attribution_names_slippage_separately_from_fees():
     c = cfg(draws=300)
-    res = a4.rr_component_answer(a4.prepare(_cost_frames("slippage"), c), c, "MNQ")
+    res = a4.rr_component_answer(a4.prepare(_cost_frames("slippage"), c, slippage={"stop_market_exit": 0.25}), c, "MNQ")
     assert res["layers"]["IS"]["r_signal"]["direction"] == "flat"
     assert res["IS"]["direction"] == "down"                          # r_gross carries the slippage
     assert res["attribution"]["slippage"] == {"IS": True, "OOS": True}
@@ -424,9 +453,9 @@ def test_attribution_names_slippage_separately_from_fees():
 
 def test_sizing_attribution_is_separate_from_cost_attribution():
     c = cfg(draws=300)
-    res = a4.rr_component_answer(a4.prepare(_confound_frames(real_rr_effect=False), c), c, "MNQ")
+    res = a4.rr_component_answer(a4.prepare(_confound_frames(real_rr_effect=False), c, slippage=SLIP), c, "MNQ")
     assert res["attribution"]["sizing"] is True
     assert res["attribution"]["fees"] == {"IS": False, "OOS": False}
     assert res["attribution"]["slippage"] == {"IS": False, "OOS": False}
-    mes = a4.rr_component_answer(a4.prepare(_confound_frames(real_rr_effect=False), c), c, "MES")
+    mes = a4.rr_component_answer(a4.prepare(_confound_frames(real_rr_effect=False), c, slippage=SLIP), c, "MES")
     assert mes["attribution"]["sizing"] is None                       # not checked there
