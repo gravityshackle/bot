@@ -143,13 +143,49 @@ same discipline as Phases 1–3.
 | **4.2** | Exit state machine: breakeven at 1R, causal trailing | trade lifecycle | exit spec Part 3 |
 | **4.3** | Setup-level study harness; per-trade records with the full score breakdown | one row per setup, outcome plus components | C3, C4 |
 | **4.4** | **A4 first**, per instrument before any pooling (see A4 in phase4_questions.md; SIL flagged low-sample/directional-only): reward/risk quality and RR band vs realized win rate, expectancy and R distribution, in-sample and out-of-sample separately | a yes/no answer on whether the component rewards better or worse trades | A4 |
-| 4.5 | Re-plan the rest of Phase 4's order from 4.4's answer. Then A1 (three-tail), A5, A6, and the weight refit (A2) with the score floor (A3) | revised tuning order | A1–A3, A5, A6 |
+| 4.5 | Re-plan the rest of Phase 4's order from 4.4's answer (see **4.5 planning inputs** below). Then A1 (three-tail), A5, A6, and the weight refit (A2) with the score floor (A3) | revised tuning order | A1–A3, A5, A6 |
 | 4.6 | `risk_engine/controls.py` and `sizing.py`: the Part 4 state machine, plugged into gate 6; `backtest/engine.py` portfolio mode | account-level results | gate 6, Part 4 |
 | 4.7 | Performance work (vectorise the gate path), then walk-forward over section B, plus A8–A11 | tuned per-instrument parameters | B, C5, C6, A8–A11 |
 | 4.8 | `backtest/report.py`: metrics per trigger type, score band and instrument, with R distributions | the Phase 4 report | C4 |
 
 Steps 4.1–4.4 answer A4 without needing the risk engine at all, which is why
 it comes later.
+
+### 4.5 planning inputs (from 4.4, 2026-09-29)
+
+4.4's answers are in `docs/phase4_questions.md`: A4 (answered), F1 (no trigger
+has positive expectancy before costs) and F2 (target placement is now the
+primary suspect). 4.5 plans around these, and specifically:
+
+1. **Target selection and stop width are two distinct candidate fixes, to be
+   evaluated separately, not as one "fix target placement" change.** A
+   target's distance in R is (distance to the nearest live major level) /
+   (stop width), and F2 found that for most triggers stop width drives it
+   more directly than level distance does. Changing how the target is chosen
+   (which level, or a cap on its distance) and changing the stop's width or
+   basis (the pattern extreme plus 0.10 × the entry-timeframe ATR) move RR,
+   fill and outcome in different ways.
+   - Evaluate each on its own first, against the current engine, per
+     instrument, in-sample then out-of-sample.
+   - Only then test them together, so any gain can be traced to one lever.
+2. **Three-tail is a separate track.** Its problem is upstream of both
+   scoring and target placement. Three independent findings converge on
+   its detection logic itself being suspect:
+   - A1: the Phase 3 ranking;
+   - F1: the worst signal R in both periods, despite the highest base score;
+   - F2: the smallest moves of any trigger, and 8 R targets that come from
+     its tight stops, not far levels.
+
+   It is a candidate for revisiting level spec §19's actual trigger
+   definition in a later phase. That stays separate from whatever general
+   target/stop fix 4.5 lands on for the other six trigger types. It is
+   neither judged by that fix nor used to tune it.
+3. **Open, not blocking: gate-4 survivorship.** Gate 4 drops setups whose
+   nearest level is under 2R, so the survivors lean toward far levels by
+   construction. The study saved only Stage 1 setups, so measuring this
+   needs an engine run that also logs gate-4 failures. It is done when such
+   a run is needed for something else, or when a target/stop candidate's
+   evaluation depends on it.
 
 ## 5. Decisions (signed off 2026-09-26)
 
