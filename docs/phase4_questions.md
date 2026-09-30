@@ -65,6 +65,47 @@ So it is not replicated. The per-instrument sign is mixed (in-sample 3 of 8 favo
 
 Source: `scripts/edge_by_trigger.py`, `analysis/edge.py`, results in `cache/analysis/edge_by_trigger.json`.
 
+### F2. Target placement is now the primary suspect (found 2026-09-29, Phase 4.4)
+
+**For 4.5: trades rarely travel far, and targets are set on a different scale from the move.** The exit state machine is not the cause. Across all 44,683 filled trades (in-sample / out-of-sample):
+- **Distance and reach:** the median target is 5.2 / 5.3 R away, but the median trade's maximum favourable excursion (MFE) is 0.67 / 0.71 R. 42% / 43% reach 1R, 19% / 20% reach 2R, 7% reach the target, and 5% fill it.
+- **Holding the original bracket doesn't help.** With the original stop and target held to the day boundary, no breakeven and no trailing, only 12% / 13% reach the target. Its signal R is still negative: -0.168 / -0.165, on 8 of 8 instruments in-sample and 7 of 8 out-of-sample (MGC out-of-sample +0.061).
+- **Breakeven and trailing cost nothing in-sample and help out-of-sample.** Their effect (actual minus bracket, signal R) is -0.004 [-0.028, +0.017] in-sample and **+0.059 [+0.032, +0.089]** out-of-sample.
+
+**Mechanism: the target in R is (level distance) / (stop width), and the two come from different scales.** `plan_trade` (`signal_engine/gates.py`) targets the **nearest live major swing beyond entry, at any distance**. 2R is used only when no swing exists (2.7% of trades). Gate 4 then drops every setup under 2R. The stop is the pattern's own extreme plus 0.10 × the entry-timeframe ATR. Medians, in prior-session daily ATR:
+- level distance 0.276;
+- stop width 0.048, so the target sits 5.25 R away;
+- the typical favourable move 0.031, on the stop's scale, not the level's.
+
+In R the move is steady across triggers (median MFE 0.67-0.78 R for the five triggers with thousands of trades; three-tail 0.33; breakout/retest 0.54, on only 177 trades): moves grow with the pattern, while targets are set by structure. Across triggers, stop width drives the spread in target R more than level distance does. Failed breakout has the farthest levels (0.391 ATR) but the widest stops (0.082 ATR), and so the lowest target R (4.49).
+
+**This traces back to the target-as-floor decision** (open_questions #6, resolved 2026-09-24, commit 3e4ec45: "the next major level in trade direction ... 2R is the gate's floor, not a cap"). That decision was right for the problem it solved: taken literally, "the nearer of" made every passing setup's RR exactly 2.0 and left `reward_risk_quality` permanently zero. F2 shows its consequence. Targeting the nearest live major level unconditionally, however far away it is, puts targets more than five stops away when trades move about 0.7 of one. Nothing caps the distance, and the disagreement flag is a diagnostic only (A6). This is **not a reason to reverse that decision**, since the old rule's defect still stands. But it makes **target placement the primary suspect for 4.5**. It also explains A4: RR measures level distance over stop width, and neither says how far price will travel, so a higher RR does not pay.
+
+Not yet measured: gate 4 drops setups whose nearest level is under 2R, so the survivors are biased toward far levels by construction. The study saved only Stage 1 setups, so sizing that effect needs an engine run that also logs gate-4 failures.
+
+Per trigger (in-sample / out-of-sample where both are given; scale columns pooled):
+
+| Trigger | Target R | MFE median (R) | Reach 1R | Reach target | Stop (daily ATR) | Level (daily ATR) | Move (daily ATR) |
+|---|---|---|---|---|---|---|---|
+| failed_breakout | 4.44 / 4.52 | 0.78 / 0.79 | 44% / 44% | 7% / 7% | 0.082 | 0.391 | 0.061 |
+| engulfing | 4.59 / 4.64 | 0.75 / 0.75 | 43% / 42% | 6% / 6% | 0.071 | 0.352 | 0.048 |
+| rejection | 5.15 / 5.25 | 0.67 / 0.70 | 40% / 43% | 7% / 6% | 0.064 | 0.348 | 0.044 |
+| momentum | 5.38 / 5.38 | 0.67 / 0.74 | 42% / 44% | 7% / 9% | 0.037 | 0.215 | 0.025 |
+| range_reclaim | 5.72 / 5.47 | 0.70 / 0.75 | 42% / 45% | 5% / 3% | 0.054 | 0.325 | 0.037 |
+| breakout_retest (n = 99 / 78) | 5.00 / 5.03 | 0.40 / 0.88 | 33% / 47% | 6% / 9% | 0.046 | 0.210 | 0.027 |
+| **three_tail** | **8.08 / 8.26** | **0.33 / 0.33** | **34% / 33%** | **4% / 4%** | **0.029** | 0.246 | **0.009** |
+
+The state machine's effect by trigger spans zero in-sample for all seven. Out-of-sample it is positive for momentum, failed breakout and rejection (intervals exclude zero). Breakout/retest is the only trigger where the bracket did better: -0.57 R [-1.21, -0.004] out-of-sample, on 78 trades with an interval that barely excludes zero, so treat it as noise until it is confirmed. In-trade MFE stops at the actual exit, so a trade scratched at breakeven cannot show a later move. The bracket's 12-13% target rate is the fairer measure of how often price gets there at all before the original stop.
+
+**Three-tail: independent diagnostics converge on one trigger.** Each measures something different, and they agree:
+- **A1** (Phase 3: three months, a signal-price proxy, no fill model): three-tail ranks 7th of 7 on outcomes; its own composite score does not order them; 5 winners carried half of all positive R.
+- **F1** (5 years, the real fill model and exit state machine, P&L): the worst signal R of any trigger in both periods, -0.330 / -0.322, despite the highest base score in the system (1.00).
+- **F2** (how far price moves, not what the trade made): the smallest moves of any trigger, in R (median MFE 0.33 against 0.67-0.88) and in absolute terms (0.009 daily ATR, about a third of the next smallest). It also has the fewest trades reaching 1R in both periods (33-34% against 40-45% for the other five large triggers; breakout/retest is 33% / 47% on 99 / 78 trades).
+
+A1's three months are the last three months of the out-of-sample window, so the in-sample agreement (2021-2024) is independent data. This is a stronger signal than any one finding. **Three-tail's fix is not target placement.** Its 8 R targets come from the tightest stops in the system (0.029 ATR, 40% below average), not from far levels (0.246 ATR, below average), and its trades barely move even in absolute terms. So what three-tail selects is itself the problem.
+
+Source: `analysis/mfe.py`, `scripts/mfe_per_trade.py` (equivalence-checked: on all 25,737 fixed-stop trades the bracket reproduces the study's actual exit exactly), `scripts/mfe_report.py`; results in `cache/analysis/mfe/` and `cache/analysis/mfe_by_trigger.json`.
+
 ---
 
 ## A. Questions that need outcomes, not just counts
